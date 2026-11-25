@@ -3,6 +3,10 @@
 //   node docs/promo/render.js
 //   ffmpeg -framerate 30 -i docs/promo/frames/f%04d.jpg -c:v libx264 -preset slow -crf 18 \
 //          -pix_fmt yuv420p -movflags +faststart headphones-control-commercial.mp4
+// Music (original, synthesised; needs Python 3 + numpy), mixed in at -16 LUFS:
+//   python3 docs/promo/music.py music.wav
+//   ffmpeg -i headphones-control-commercial.mp4 -i music.wav -map 0:v -map 1:a -c:v copy \
+//          -af loudnorm=I=-16:TP=-1.5 -c:a aac -b:a 192k -shortest final.mp4
 // Needs Node.js with Playwright (npm install playwright && npx playwright install chromium).
 const path = require('path');
 const fs = require('fs');
