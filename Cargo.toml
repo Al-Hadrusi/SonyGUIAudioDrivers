@@ -2,6 +2,7 @@
 name = "sony-audio-control"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 description = "A desktop companion app for Sony Bluetooth headphones and earbuds (noise cancelling, ambient sound, EQ, ...), written in 100% safe Rust."
 license = "MIT"
 default-run = "sony-audio-control"

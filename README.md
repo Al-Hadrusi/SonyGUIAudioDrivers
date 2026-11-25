@@ -65,6 +65,45 @@ If the control channel can't be found through SDP, you can force an RFCOMM chann
 SONY_RFCOMM_CHANNEL=9 cargo run --release
 ```
 
+### Gentoo
+
+The project needs **Rust 1.95 or newer**. Check your version with `rustc --version`. If Portage's
+Rust is older, install rustup (`emerge --ask dev-util/rustup`, then `rustup-init-gentoo`) or unmask a
+newer `dev-lang/rust` / `dev-lang/rust-bin`.
+
+```bash
+sudo emerge --ask --noreplace sys-apps/dbus dev-util/pkgconf net-wireless/bluez media-libs/mesa x11-libs/libxkbcommon
+```
+
+On X11, `x11-libs/libxkbcommon` needs the `X` USE flag, because the window library loads
+`libxkbcommon-x11.so` at runtime:
+
+```bash
+echo "x11-libs/libxkbcommon X" | sudo tee /etc/portage/package.use/sony-audio-control
+```
+
+Your kernel needs Bluetooth with RFCOMM: `CONFIG_BT`, `CONFIG_BT_RFCOMM`, `CONFIG_BT_BREDR` and
+your adapter's driver (usually `CONFIG_BT_HCIBTUSB`). Check with:
+
+```bash
+zgrep -E "CONFIG_BT(_RFCOMM|_BREDR|_HCIBTUSB)?=" /proc/config.gz
+```
+
+Start BlueZ. With OpenRC:
+
+```bash
+sudo rc-update add bluetooth default && sudo rc-service bluetooth start
+```
+
+With systemd:
+
+```bash
+sudo systemctl enable --now bluetooth
+```
+
+Then pair the headset (for example with `bluetoothctl`: `scan on`, `pair <MAC>`, `trust <MAC>`,
+`connect <MAC>`) and run `cargo run --release`.
+
 ### Windows / macOS
 
 The app builds and runs with the simulated devices. Real Bluetooth is only implemented for Linux so
