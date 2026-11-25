@@ -50,9 +50,9 @@ impl DeviceInfo {
     }
 }
 
-/// Devices currently available: simulated demo devices plus paired
-/// Bluetooth headsets (when Bluetooth support is compiled in).
-pub fn list_devices() -> (Vec<DeviceInfo>, Option<String>) {
+/// Devices currently available: paired Bluetooth headsets (when Bluetooth
+/// support is compiled in), plus the simulated demo devices if `include_demo`.
+pub fn list_devices(include_demo: bool) -> (Vec<DeviceInfo>, Option<String>) {
     let mut devices = Vec::new();
     #[cfg(all(feature = "bluetooth", target_os = "linux"))]
     let error = match bluetooth::list_paired() {
@@ -71,7 +71,9 @@ pub fn list_devices() -> (Vec<DeviceInfo>, Option<String>) {
     };
     #[cfg(not(all(feature = "bluetooth", target_os = "linux")))]
     let error = Some("This build has no Bluetooth support (demo devices only).".to_string());
-    devices.extend(simulator::demo_devices());
+    if include_demo {
+        devices.extend(simulator::demo_devices());
+    }
     (devices, error)
 }
 

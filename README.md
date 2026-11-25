@@ -45,8 +45,10 @@ Both protocol generations are supported and detected automatically from the head
 Settings a model doesn't have (for example the touch sensor toggle on V2, or wind noise reduction on
 the WH-1000XM5) are hidden.
 
-Four **simulated devices** are built in: WH-1000XM6 (V2 with Listening Mode), WH-1000XM5 (V2),
-WF-1000XM5 (V2 earbuds) and WH-1000XM4 (V1 with Surround). They speak the real wire protocol, so you can try every control without hardware.
+For development, four **simulated devices** are built in: WH-1000XM6 (V2 with Listening Mode),
+WH-1000XM5 (V2), WF-1000XM5 (V2 earbuds) and WH-1000XM4 (V1 with Surround). They speak the real wire
+protocol, so every control can be tried without hardware. They are hidden unless the app is started
+with `--demo`.
 
 ## Building and running
 
@@ -56,10 +58,16 @@ Install Rust from <https://rustup.rs>, then:
 cargo run --release
 ```
 
-Open a simulated device directly:
+For development, list the simulated devices too:
 
 ```bash
-cargo run --release -- --demo WH-1000XM5 --tab sound
+cargo run --release -- --demo
+```
+
+Or open one directly:
+
+```bash
+cargo run --release -- --demo WH-1000XM6 --tab sound
 ```
 
 ### Linux (real headsets)
@@ -131,7 +139,7 @@ If a setting doesn't apply, open an issue with this output and your headset mode
 
 ### Windows / macOS
 
-The app builds and runs with the simulated devices. Real Bluetooth is only implemented for Linux so
+The app builds and runs, but only with the simulated devices (`--demo`). Real Bluetooth is only implemented for Linux so
 far: add a `Transport` implementation in `src/transport/` to support another platform.
 
 To build without Bluetooth support (no D-Bus needed):

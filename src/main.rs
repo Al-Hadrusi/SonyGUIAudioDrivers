@@ -8,18 +8,25 @@ mod ui;
 use ui::app::{LaunchOptions, Tab};
 
 const USAGE: &str = "\
-Usage: sony-audio-control [--demo <MODEL>] [--tab status|sound|system]
+Usage: sony-audio-control [--demo [MODEL]] [--tab status|sound|system]
 
-  --demo <MODEL>   Connect to a built-in simulated device (e.g. WH-1000XM5, WF-1000XM5)
+  --demo           Also list the built-in simulated devices (for development)
+  --demo <MODEL>   Connect straight to a simulated device
+                   (WH-1000XM6, WH-1000XM5, WF-1000XM5 or WH-1000XM4)
   --tab <TAB>      Tab to open after connecting
 ";
 
 fn parse_args() -> Result<LaunchOptions, String> {
     let mut opts = LaunchOptions::default();
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--demo" => opts.demo = Some(args.next().ok_or("--demo needs a model name")?),
+            "--demo" => {
+                opts.show_demo = true;
+                if let Some(model) = args.next_if(|a| !a.starts_with("--")) {
+                    opts.demo = Some(model);
+                }
+            }
             "--tab" => {
                 opts.tab = match args.next().as_deref() {
                     Some("status") => Tab::Status,

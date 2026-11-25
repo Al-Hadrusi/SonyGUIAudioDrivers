@@ -37,12 +37,15 @@ pub struct App {
     scanning: Option<Receiver<(Vec<DeviceInfo>, Option<String>)>>,
     toast: Option<(String, Instant)>,
     start_tab: Tab,
+    show_demo: bool,
 }
 
 /// Command-line options.
 #[derive(Default)]
 pub struct LaunchOptions {
-    /// Connect straight to a simulated device of this model.
+    /// Show the simulated demo devices in the device list (`--demo`).
+    pub show_demo: bool,
+    /// Connect straight to a simulated device of this model (`--demo <MODEL>`).
     pub demo: Option<String>,
     pub tab: Tab,
 }
@@ -88,6 +91,7 @@ impl App {
             scanning: None,
             toast: None,
             start_tab: opts.tab,
+            show_demo: opts.show_demo || opts.demo.is_some(),
         };
         app.rescan(&cc.egui_ctx);
         if let Some(model) = opts.demo {
@@ -104,8 +108,9 @@ impl App {
     fn rescan(&mut self, ctx: &egui::Context) {
         let (tx, rx) = mpsc::channel();
         let ctx = ctx.clone();
+        let include_demo = self.show_demo;
         std::thread::spawn(move || {
-            let _ = tx.send(transport::list_devices());
+            let _ = tx.send(transport::list_devices(include_demo));
             ctx.request_repaint();
         });
         self.scanning = Some(rx);
@@ -334,8 +339,10 @@ fn devices_screen(
                 action = Action::Connect(d.clone());
             }
         }
-        ui.add_space(8.0);
-        section_label(ui, "Demo (simulated)");
+        if !demo.is_empty() {
+            ui.add_space(8.0);
+            section_label(ui, "Demo (simulated)");
+        }
         for d in demo {
             if device_row(ui, d) {
                 action = Action::Connect(d.clone());
