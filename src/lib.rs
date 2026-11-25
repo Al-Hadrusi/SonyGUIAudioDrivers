@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod config;
 pub mod protocol;
 pub mod transport;
 pub mod worker;

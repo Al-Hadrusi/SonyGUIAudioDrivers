@@ -8,6 +8,7 @@ use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, 
 
 use super::theme::{self, *};
 use super::widgets::*;
+use headphones_control::config::Config;
 use headphones_control::protocol::*;
 use headphones_control::transport::{self, DeviceInfo, FormFactor};
 use headphones_control::worker::{Connection, Event};
@@ -38,7 +39,21 @@ pub struct App {
     toast: Option<(String, Instant)>,
     start_tab: Tab,
     show_demo: bool,
+
+    config: Config,
+    /// Set when the user disconnects on purpose: no automatic reconnect
+    /// until they pick a device again.
+    suppress_auto: bool,
+    last_scan: Instant,
+    /// Whether the running scan was started by the user (shows a spinner).
+    scan_visible: bool,
+    last_auto_attempt: Option<Instant>,
 }
+
+/// How often the device list is refreshed in the background.
+const BACKGROUND_SCAN: Duration = Duration::from_secs(4);
+/// Minimum time between two automatic connection attempts.
+const AUTO_RETRY: Duration = Duration::from_secs(20);
 
 /// Command-line options.
 #[derive(Default)]
@@ -92,20 +107,27 @@ impl App {
             toast: None,
             start_tab: opts.tab,
             show_demo: opts.show_demo || opts.demo.is_some(),
+            config: Config::load(),
+            suppress_auto: opts.demo.is_some(),
+            last_scan: Instant::now(),
+            scan_visible: true,
+            last_auto_attempt: None,
         };
-        app.rescan(&cc.egui_ctx);
+        app.rescan(&cc.egui_ctx, true);
         if let Some(model) = opts.demo {
             let device = DeviceInfo {
                 address: format!("demo:{model}"),
                 name: model,
                 connected: false,
             };
-            app.connect(&cc.egui_ctx, device);
+            app.connect(&cc.egui_ctx, device, false);
         }
         app
     }
 
-    fn rescan(&mut self, ctx: &egui::Context) {
+    fn rescan(&mut self, ctx: &egui::Context, visible: bool) {
+        self.last_scan = Instant::now();
+        self.scan_visible = visible;
         let (tx, rx) = mpsc::channel();
         let ctx = ctx.clone();
         let include_demo = self.show_demo;
@@ -116,11 +138,61 @@ impl App {
         self.scanning = Some(rx);
     }
 
+    fn save_config(&mut self) {
+        if let Err(e) = self.config.save() {
+            self.toast(format!("Could not save settings: {e}"));
+        }
+    }
+
+    /// Connect to the remembered headset once BlueZ reports it connected
+    /// (e.g. right after it was switched on).
+    fn maybe_auto_connect(&mut self, ctx: &egui::Context) {
+        if !self.config.auto_connect
+            || self.suppress_auto
+            || !matches!(self.screen, Screen::Devices)
+        {
+            return;
+        }
+        if self
+            .last_auto_attempt
+            .is_some_and(|t| t.elapsed() < AUTO_RETRY)
+        {
+            return;
+        }
+        let Some(last) = &self.config.last_device else {
+            return;
+        };
+        let Some(found) = self
+            .devices
+            .iter()
+            .find(|d| d.address == last.address && d.connected)
+            .cloned()
+        else {
+            return;
+        };
+        self.last_auto_attempt = Some(Instant::now());
+        self.connect(ctx, found, false);
+    }
+
     fn toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), Instant::now()));
     }
 
-    fn connect(&mut self, ctx: &egui::Context, device: DeviceInfo) {
+    /// `chosen` is true when the user picked the device (it becomes the
+    /// remembered device) and false for automatic connections.
+    fn connect(&mut self, ctx: &egui::Context, device: DeviceInfo, chosen: bool) {
+        if chosen {
+            self.suppress_auto = false;
+            if !device.is_demo()
+                && self.config.last_device.as_ref().map(|d| &d.address) != Some(&device.address)
+            {
+                self.config.last_device = Some(DeviceInfo {
+                    connected: false,
+                    ..device.clone()
+                });
+                self.save_config();
+            }
+        }
         let wake_ctx = ctx.clone();
         let conn = Connection::spawn(device.clone(), move || wake_ctx.request_repaint());
         self.screen = Screen::Connecting {
@@ -195,8 +267,15 @@ impl eframe::App for App {
             self.devices = devices;
             self.device_note = note;
             self.scanning = None;
+            self.maybe_auto_connect(&ctx);
         }
         self.process_events();
+        if matches!(self.screen, Screen::Devices)
+            && self.scanning.is_none()
+            && self.last_scan.elapsed() >= BACKGROUND_SCAN
+        {
+            self.rescan(&ctx, false);
+        }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))
@@ -216,11 +295,17 @@ impl eframe::App for App {
                 let mut action = Action::None;
                 match &mut self.screen {
                     Screen::Devices => {
+                        let auto = self
+                            .config
+                            .last_device
+                            .as_ref()
+                            .map(|d| (d.address.as_str(), self.config.auto_connect));
                         action = devices_screen(
                             &mut child,
                             &self.devices,
                             self.device_note.as_deref(),
-                            self.scanning.is_some(),
+                            self.scanning.is_some() && self.scan_visible,
+                            auto,
                         );
                     }
                     Screen::Connecting { device, since, .. } => {
@@ -236,11 +321,17 @@ impl eframe::App for App {
                 }
                 match action {
                     Action::None => {}
-                    Action::Rescan => self.rescan(&ctx),
-                    Action::Connect(d) => self.connect(&ctx, d),
+                    Action::Rescan => self.rescan(&ctx, true),
+                    Action::Connect(d) => self.connect(&ctx, d, true),
+                    Action::SetAutoConnect(on) => {
+                        self.config.auto_connect = on;
+                        self.save_config();
+                    }
                     Action::Cancel => {
+                        // The user left on purpose: don't reconnect behind their back.
+                        self.suppress_auto = true;
                         self.screen = Screen::Devices;
-                        self.rescan(&ctx);
+                        self.rescan(&ctx, true);
                     }
                 }
             });
@@ -285,6 +376,7 @@ enum Action {
     None,
     Rescan,
     Connect(DeviceInfo),
+    SetAutoConnect(bool),
     Cancel,
 }
 
@@ -297,6 +389,8 @@ fn devices_screen(
     devices: &[DeviceInfo],
     note: Option<&str>,
     scanning: bool,
+    // Remembered device address and whether auto-connect is on.
+    auto: Option<(&str, bool)>,
 ) -> Action {
     let mut action = Action::None;
     egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
@@ -335,16 +429,31 @@ fn devices_screen(
             });
         }
         for d in real {
-            if device_row(ui, d) {
+            let remembered = auto.is_some_and(|(addr, _)| addr == d.address);
+            if device_row(ui, d, remembered) {
                 action = Action::Connect(d.clone());
             }
+        }
+        if let Some((_, on)) = auto {
+            ui.add_space(8.0);
+            card(ui, None, |ui| {
+                let mut on = on;
+                if switch_row(
+                    ui,
+                    "Connect automatically",
+                    Some("Connect to your last headset as soon as it is turned on"),
+                    &mut on,
+                ) {
+                    action = Action::SetAutoConnect(on);
+                }
+            });
         }
         if !demo.is_empty() {
             ui.add_space(8.0);
             section_label(ui, "Demo (simulated)");
         }
         for d in demo {
-            if device_row(ui, d) {
+            if device_row(ui, d, false) {
                 action = Action::Connect(d.clone());
             }
         }
@@ -352,7 +461,7 @@ fn devices_screen(
     action
 }
 
-fn device_row(ui: &mut Ui, d: &DeviceInfo) -> bool {
+fn device_row(ui: &mut Ui, d: &DeviceInfo, remembered: bool) -> bool {
     let resp = egui::Frame::new()
         .fill(CARD)
         .corner_radius(CornerRadius::same(CARD_RADIUS))
@@ -376,13 +485,16 @@ fn device_row(ui: &mut Ui, d: &DeviceInfo) -> bool {
                 );
                 ui.vertical(|ui| {
                     ui.label(RichText::new(&d.name).size(16.0).color(TEXT));
-                    let sub = if d.is_demo() {
+                    let mut sub = if d.is_demo() {
                         "Simulated device".to_string()
                     } else if d.connected {
                         format!("Connected · {}", d.address)
                     } else {
                         d.address.clone()
                     };
+                    if remembered {
+                        sub.push_str(" · Last used");
+                    }
                     ui.label(RichText::new(sub).size(12.5).color(if d.connected {
                         GOOD
                     } else {
