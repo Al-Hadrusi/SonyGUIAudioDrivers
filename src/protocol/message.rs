@@ -166,6 +166,10 @@ pub mod op {
     pub const V2_PLAY_PARAM_RET: u8 = 0xA7;
     pub const V2_PLAY_PARAM_SET: u8 = 0xA8;
     pub const V2_PLAY_PARAM_NOTIFY: u8 = 0xA9;
+    /// V2 "general settings" (slots 0xD1..=0xD4, e.g. touch panel, multipoint).
+    /// GET/SET/RET/NTFY param share the V1 touch-sensor opcodes 0xD6..0xD9.
+    pub const V2_GS_GET_CAPABILITY: u8 = 0xD0;
+    pub const V2_GS_RET_CAPABILITY: u8 = 0xD1;
     pub const TOUCH_SENSOR_GET: u8 = 0xD6;
     pub const TOUCH_SENSOR_RET: u8 = 0xD7;
     pub const TOUCH_SENSOR_SET: u8 = 0xD8;
@@ -967,6 +971,72 @@ impl NcAmbButton {
     }
 }
 
+/// Longest name/summary of a general setting we keep.
+const GS_TEXT_MAX: usize = 200;
+
+/// General-setting slot 1..=4 <-> wire code 0xD1..=0xD4.
+fn gs_slot_code(slot: u8) -> Option<u8> {
+    (1..=4).contains(&slot).then(|| 0xD0 + slot)
+}
+
+fn gs_slot(code: u8) -> Option<u8> {
+    (0xD1..=0xD4).contains(&code).then(|| code - 0xD0)
+}
+
+/// Friendly label for the enum-style names some headsets report.
+fn gs_label(raw: &str) -> String {
+    match raw {
+        "TOUCH_PANEL_SETTING" => "Touch panel".into(),
+        "MULTIPOINT_SETTING" => "Connect to 2 devices simultaneously".into(),
+        "CAPTURE_VOICE_DURING_A_PHONE_CALL_SETTING" => "Capture voice during a phone call".into(),
+        _ if raw.contains('_') && raw == raw.to_uppercase() => {
+            // e.g. SOME_FEATURE_SETTING -> "Some feature"
+            let words: Vec<&str> = raw
+                .split('_')
+                .filter(|w| !w.is_empty() && *w != "SETTING")
+                .collect();
+            let mut text = words.join(" ").to_lowercase();
+            if let Some(first) = text.get(..1) {
+                text = first.to_uppercase() + text.get(1..).unwrap_or("");
+            }
+            text
+        }
+        _ => raw.to_string(),
+    }
+}
+
+/// `[D1, slot, setting type, string format, len, subject.., len, summary..]`
+fn parse_gs_info(p: &[u8]) -> Result<Notification, ParseError> {
+    let opcode = p.first().copied().unwrap_or(0);
+    let invalid = |reason| ParseError::Invalid { opcode, reason };
+    need(p, 6)?;
+    let slot = gs_slot(p[1]).ok_or(invalid("unknown general setting"))?;
+    if p[2] != 0x00 {
+        return Ok(Notification::Unknown(p.to_vec())); // list-type: not supported
+    }
+    let mut rest = &p[4..];
+    let mut texts = Vec::with_capacity(2);
+    for _ in 0..2 {
+        let (&len, tail) = rest.split_first().ok_or(invalid("missing text length"))?;
+        let len = usize::from(len);
+        let bytes = tail.get(..len).ok_or(invalid("text longer than message"))?;
+        let text: String = String::from_utf8_lossy(&bytes[..len.min(GS_TEXT_MAX)])
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect();
+        texts.push(text);
+        rest = &tail[len..];
+    }
+    let summary = texts.pop().unwrap_or_default();
+    let raw = texts.pop().unwrap_or_default();
+    let name = if p[3] == 0x01 { gs_label(&raw) } else { raw };
+    Ok(Notification::GeneralSettingInfo {
+        slot,
+        name,
+        summary,
+    })
+}
+
 /// V2 "enable/disable" byte: 0x00 means enabled, 0x01 disabled.
 fn v2_flag(on: bool) -> u8 {
     u8::from(!on)
@@ -1036,6 +1106,13 @@ pub enum Request {
     SetVoiceGuidance(bool),
     GetVoiceGuidanceVolume,
     SetVoiceGuidanceVolume(i8),
+    /// V2 general setting `slot` (1..=4): ask for its name and type.
+    GetGeneralSettingInfo(u8),
+    GetGeneralSetting(u8),
+    SetGeneralSetting {
+        slot: u8,
+        on: bool,
+    },
     PowerOff,
 }
 
@@ -1056,6 +1133,9 @@ impl Request {
                 | Request::SetVoiceGuidance(_)
                 | Request::GetVoiceGuidanceVolume
                 | Request::SetVoiceGuidanceVolume(_)
+                | Request::GetGeneralSettingInfo(_)
+                | Request::GetGeneralSetting(_)
+                | Request::SetGeneralSetting { .. }
         )
     }
 
@@ -1174,6 +1254,20 @@ impl Request {
             Request::Playback(c) => vec![op::V2_PLAY_STATUS_SET, 0x01, 0x00, c.code()],
             Request::GetVolume => vec![op::V2_PLAY_PARAM_GET, 0x20],
             Request::SetVolume(v) => vec![op::V2_PLAY_PARAM_SET, 0x20, (*v).min(VOLUME_MAX)],
+            // 0x01 = ask for English names.
+            Request::GetGeneralSettingInfo(slot) => {
+                vec![op::V2_GS_GET_CAPABILITY, gs_slot_code(*slot)?, 0x01]
+            }
+            Request::GetGeneralSetting(slot) => vec![op::TOUCH_SENSOR_GET, gs_slot_code(*slot)?],
+            // 0x00 = boolean setting; value 0x00 = on.
+            Request::SetGeneralSetting { slot, on } => {
+                vec![
+                    op::TOUCH_SENSOR_SET,
+                    gs_slot_code(*slot)?,
+                    0x00,
+                    v2_flag(*on),
+                ]
+            }
             Request::GetVoiceGuidance => vec![op2::VOICE_GUIDANCE_GET, 0x01],
             Request::SetVoiceGuidance(on) => vec![op2::VOICE_GUIDANCE_SET, 0x01, v2_flag(*on)],
             Request::GetVoiceGuidanceVolume => vec![op2::VOICE_GUIDANCE_GET, 0x20],
@@ -1333,6 +1427,12 @@ impl Request {
                 Request::SetAutoPowerOff(AutoPowerOff::from_codes(at(2)?, at(3)?)?)
             }
             op::V2_EQ_STATUS_GET if v2 => Request::GetEqAvailability,
+            op::V2_GS_GET_CAPABILITY if v2 => Request::GetGeneralSettingInfo(gs_slot(sub?)?),
+            op::TOUCH_SENSOR_GET if v2 => Request::GetGeneralSetting(gs_slot(sub?)?),
+            op::TOUCH_SENSOR_SET if v2 && at(2) == Some(0x00) => Request::SetGeneralSetting {
+                slot: gs_slot(sub?)?,
+                on: at(3)? == 0x00,
+            },
             op::V2_PLAY_STATUS_GET if v2 && sub == Some(0x01) => Request::GetPlayback,
             op::V2_PLAY_STATUS_SET if v2 && sub == Some(0x01) => {
                 Request::Playback(PlaybackControl::from_code(at(3)?)?)
@@ -1542,6 +1642,16 @@ pub enum Notification {
     Volume(u8),
     VoiceGuidance(bool),
     VoiceGuidanceVolume(i8),
+    /// V2 general setting description. Only on/off settings are reported.
+    GeneralSettingInfo {
+        slot: u8,
+        name: String,
+        summary: String,
+    },
+    GeneralSetting {
+        slot: u8,
+        on: bool,
+    },
     Surround(Surround),
     SpeakToChat(bool),
     SpeakToChatConfig(SpeakToChatConfig),
@@ -1733,6 +1843,18 @@ impl Notification {
             op::STC_CONFIG_RET | op::STC_CONFIG_NOTIFY => parse_stc_config(p, d)
                 .map(Notification::SpeakToChatConfig)
                 .ok_or(invalid("bad speak-to-chat config")),
+            op::V2_GS_RET_CAPABILITY if v2 => parse_gs_info(p),
+            op::TOUCH_SENSOR_RET | op::TOUCH_SENSOR_NOTIFY if v2 => {
+                need(p, 4)?;
+                let slot = gs_slot(p[1]).ok_or(invalid("unknown general setting"))?;
+                if p[2] != 0x00 {
+                    return Ok(Notification::Unknown(p.to_vec())); // list-type setting
+                }
+                Ok(Notification::GeneralSetting {
+                    slot,
+                    on: p[3] == 0x00,
+                })
+            }
             op::TOUCH_SENSOR_RET | op::TOUCH_SENSOR_NOTIFY if !v2 => {
                 need(p, 4)?;
                 Ok(Notification::TouchSensor(p[3] == 0x01))
@@ -1845,6 +1967,32 @@ impl Notification {
                 vec![op2::VOICE_GUIDANCE_NOTIFY, 0x20, v.to_be_bytes()[0]]
             }
             Notification::Surround(mode) => vec![op::V1_SURROUND_NOTIFY, 0x01, mode.code()],
+            Notification::GeneralSettingInfo {
+                slot,
+                name,
+                summary,
+            } => {
+                let mut p = vec![
+                    op::V2_GS_RET_CAPABILITY,
+                    gs_slot_code(*slot).unwrap_or(0xD1),
+                    0x00,
+                    0x01,
+                ];
+                for text in [name, summary] {
+                    let bytes = &text.as_bytes()[..text.len().min(GS_TEXT_MAX)];
+                    p.push(u8::try_from(bytes.len()).unwrap_or(0));
+                    p.extend_from_slice(bytes);
+                }
+                p
+            }
+            Notification::GeneralSetting { slot, on } => {
+                vec![
+                    op::TOUCH_SENSOR_NOTIFY,
+                    gs_slot_code(*slot).unwrap_or(0xD1),
+                    0x00,
+                    v2_flag(*on),
+                ]
+            }
             Notification::UpsamplingAvailable(ok) => {
                 vec![op::V2_AUDIO_STATUS_NOTIFY, 0x01, v2_flag(*ok)]
             }
@@ -2148,6 +2296,67 @@ mod tests {
             })
         ));
         assert_eq!(EqLayout::TenBand.presets().len(), 8);
+    }
+
+    #[test]
+    fn general_settings() {
+        assert_eq!(
+            Request::GetGeneralSettingInfo(3).payload(XM5).unwrap(),
+            vec![0xD0, 0xD3, 0x01]
+        );
+        assert_eq!(
+            Request::GetGeneralSetting(3).payload(XM5).unwrap(),
+            vec![0xD6, 0xD3]
+        );
+        assert_eq!(
+            Request::SetGeneralSetting { slot: 3, on: false }
+                .payload(XM5)
+                .unwrap(),
+            vec![0xD8, 0xD3, 0x00, 0x01]
+        );
+        assert_eq!(Request::GetGeneralSetting(9).payload(XM5), None);
+        assert_eq!(Request::GetGeneralSetting(3).payload(Dialect::V1), None);
+        // RET capability: [D1, slot, bool, enum-name, len, subject, len, summary]
+        let mut ret = vec![0xD1, 0xD3, 0x00, 0x01, 19];
+        ret.extend_from_slice(b"TOUCH_PANEL_SETTING");
+        ret.push(0);
+        assert_eq!(
+            Notification::parse(&ret, XM5).unwrap(),
+            Notification::GeneralSettingInfo {
+                slot: 3,
+                name: "Touch panel".into(),
+                summary: String::new()
+            }
+        );
+        // List-type settings are not offered (yet).
+        assert!(matches!(
+            Notification::parse(&[0xD1, 0xD2, 0x01, 0x00, 0, 0], XM5).unwrap(),
+            Notification::Unknown(_)
+        ));
+        // Truncated text lengths are errors, not panics.
+        assert!(Notification::parse(&[0xD1, 0xD3, 0x00, 0x01, 50, b'A'], XM5).is_err());
+        assert_eq!(
+            Notification::parse(&[0xD7, 0xD3, 0x00, 0x00], XM5).unwrap(),
+            Notification::GeneralSetting { slot: 3, on: true }
+        );
+        // Same opcodes on V1 still mean the old touch sensor.
+        assert_eq!(
+            Notification::parse(&[0xD7, 0xD2, 0x01, 0x01], Dialect::V1).unwrap(),
+            Notification::TouchSensor(true)
+        );
+        for r in [
+            Request::GetGeneralSettingInfo(1),
+            Request::GetGeneralSetting(4),
+            Request::SetGeneralSetting { slot: 2, on: true },
+        ] {
+            assert_eq!(Request::decode(&r.payload(XM5).unwrap(), XM5), Some(r));
+        }
+        let n = Notification::GeneralSettingInfo {
+            slot: 2,
+            name: "Multipoint".into(),
+            summary: "Connect two devices".into(),
+        };
+        assert_eq!(Notification::parse(&n.payload(XM5), XM5).unwrap(), n);
     }
 
     #[test]

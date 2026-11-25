@@ -136,6 +136,8 @@ struct DeviceView {
     voice_volume: Option<i8>,
     /// `Some(false)` when the current Listening Mode blocks DSEE.
     upsampling_available: Option<bool>,
+    /// V2 general settings the headset declared: slot -> (name, summary, value).
+    general: std::collections::BTreeMap<u8, (String, String, Option<bool>)>,
 }
 
 impl App {
@@ -807,6 +809,7 @@ impl DeviceView {
             voice_guidance: None,
             voice_volume: None,
             upsampling_available: None,
+            general: std::collections::BTreeMap::new(),
         }
     }
 
@@ -881,6 +884,24 @@ impl DeviceView {
             Notification::VoiceGuidance(on) => self.voice_guidance = Some(on),
             Notification::VoiceGuidanceVolume(v) => self.voice_volume = Some(v),
             Notification::UpsamplingAvailable(ok) => self.upsampling_available = Some(ok),
+            Notification::GeneralSettingInfo {
+                slot,
+                name,
+                summary,
+            } => {
+                let entry =
+                    self.general
+                        .entry(slot)
+                        .or_insert((String::new(), String::new(), None));
+                entry.0 = name;
+                entry.1 = summary;
+            }
+            Notification::GeneralSetting { slot, on } => {
+                self.general
+                    .entry(slot)
+                    .or_insert((String::new(), String::new(), None))
+                    .2 = Some(on);
+            }
             Notification::SpeakToChat(on) => self.speak_to_chat = on,
             Notification::SpeakToChatConfig(cfg) => {
                 let focus = self.stc.focus_on_voice;
@@ -1575,6 +1596,33 @@ impl DeviceView {
                 );
             }
         });
+
+        // General settings declared by the headset (V2: touch panel,
+        // multipoint, ...), shown with the headset's own names.
+        let declared: Vec<(u8, String, String, bool)> = self
+            .general
+            .iter()
+            .filter_map(|(slot, (name, summary, on))| {
+                Some((*slot, name.clone(), summary.clone(), (*on)?)).filter(|g| !g.1.is_empty())
+            })
+            .collect();
+        if !declared.is_empty() {
+            ui.add_space(12.0);
+            card(ui, None, |ui| {
+                for (i, (slot, name, summary, mut on)) in declared.into_iter().enumerate() {
+                    if i > 0 {
+                        divider(ui);
+                    }
+                    let sub = (!summary.is_empty()).then_some(summary.as_str());
+                    if switch_row(ui, &name, sub, &mut on) {
+                        if let Some(g) = self.general.get_mut(&slot) {
+                            g.2 = Some(on);
+                        }
+                        self.conn.send(Request::SetGeneralSetting { slot, on });
+                    }
+                }
+            });
+        }
 
         ui.add_space(12.0);
         card(ui, None, |ui| {

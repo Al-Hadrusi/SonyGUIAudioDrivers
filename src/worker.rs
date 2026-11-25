@@ -168,6 +168,14 @@ fn run(
         Request::GetVolume,
         Request::GetVoiceGuidance,
         Request::GetVoiceGuidanceVolume,
+        Request::GetGeneralSettingInfo(1),
+        Request::GetGeneralSettingInfo(2),
+        Request::GetGeneralSettingInfo(3),
+        Request::GetGeneralSettingInfo(4),
+        Request::GetGeneralSetting(1),
+        Request::GetGeneralSetting(2),
+        Request::GetGeneralSetting(3),
+        Request::GetGeneralSetting(4),
     ]);
     // Not every model supports every query; missing answers are not fatal.
     let mut got_ambient = false;

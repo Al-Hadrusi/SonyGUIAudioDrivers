@@ -56,6 +56,8 @@ pub struct SimulatedHeadset {
     playback: Option<PlaybackState>,
     volume: Option<u8>,
     voice_guidance: Option<(bool, i8)>,
+    /// V2 general settings: (slot, name, on).
+    general: Vec<(u8, &'static str, bool)>,
     /// Every request received, for tests.
     pub received: Vec<Request>,
 }
@@ -105,6 +107,14 @@ impl SimulatedHeadset {
             playback: dialect.is_v2().then_some(PlaybackState::Paused),
             volume: dialect.is_v2().then_some(12),
             voice_guidance: dialect.is_v2().then_some((true, 0)),
+            general: if upper.contains("XM6") {
+                vec![
+                    (2, "MULTIPOINT_SETTING", true),
+                    (3, "TOUCH_PANEL_SETTING", true),
+                ]
+            } else {
+                Vec::new()
+            },
             received: Vec::new(),
         }
     }
@@ -373,6 +383,27 @@ impl SimulatedHeadset {
                 if let Some((on, _)) = self.voice_guidance {
                     self.voice_guidance = Some((on, vol));
                     self.emit(Notification::VoiceGuidanceVolume(vol));
+                }
+            }
+            Request::GetGeneralSettingInfo(slot) => {
+                if let Some(&(_, raw, _)) = self.general.iter().find(|g| g.0 == slot) {
+                    // Like the real headset: enum-style name, empty summary.
+                    let mut p = vec![op::V2_GS_RET_CAPABILITY, 0xD0 + slot, 0x00, 0x01];
+                    p.push(u8::try_from(raw.len()).unwrap_or(0));
+                    p.extend_from_slice(raw.as_bytes());
+                    p.push(0);
+                    self.emit(Notification::Unknown(p));
+                }
+            }
+            Request::GetGeneralSetting(slot) => {
+                if let Some(&(_, _, on)) = self.general.iter().find(|g| g.0 == slot) {
+                    self.emit(Notification::GeneralSetting { slot, on });
+                }
+            }
+            Request::SetGeneralSetting { slot, on } => {
+                if let Some(g) = self.general.iter_mut().find(|g| g.0 == slot) {
+                    g.2 = on;
+                    self.emit(Notification::GeneralSetting { slot, on });
                 }
             }
             Request::PowerOff => self.powered_off = true,
