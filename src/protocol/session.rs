@@ -96,7 +96,7 @@ impl Session {
         if self.debug {
             eprintln!("[sony] TX {request:?}: {}", hex(&payload));
         }
-        let frame = Frame::new(DataType::DataMdr, self.seq, payload).encode();
+        let frame = Frame::new(request.data_type(), self.seq, payload).encode();
         for _ in 0..=RETRIES {
             self.acked = false;
             self.transport.write_all(&frame)?;
@@ -146,14 +146,11 @@ impl Session {
             DataType::DataMdr | DataType::DataMdrNo2 => {
                 self.transport
                     .write_all(&Frame::ack_for(frame.seq).encode())?;
-                if frame.data_type == DataType::DataMdrNo2 {
-                    // Secondary channel (voice guidance etc.): not used yet.
-                    if self.debug {
-                        eprintln!("[sony] RX (ch2): {}", hex(&frame.payload));
-                    }
-                    return Ok(());
-                }
-                let parsed = Notification::parse(&frame.payload, self.dialect);
+                let parsed = if frame.data_type == DataType::DataMdrNo2 {
+                    Notification::parse_t2(&frame.payload, self.dialect)
+                } else {
+                    Notification::parse(&frame.payload, self.dialect)
+                };
                 if self.debug {
                     eprintln!("[sony] RX {}: {parsed:?}", hex(&frame.payload));
                 }

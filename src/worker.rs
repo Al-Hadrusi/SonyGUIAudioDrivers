@@ -161,6 +161,13 @@ fn run(
         Request::GetTouchSensor,
         Request::GetPauseWhenTakenOff,
         Request::GetAutoPowerOff,
+        Request::GetEqAvailability,
+        Request::GetConnectionPriority,
+        Request::GetNcAmbButton,
+        Request::GetPlayback,
+        Request::GetVolume,
+        Request::GetVoiceGuidance,
+        Request::GetVoiceGuidanceVolume,
     ]);
     // Not every model supports every query; missing answers are not fatal.
     let mut got_ambient = false;
@@ -225,7 +232,21 @@ fn run(
             let power_off = r == Request::PowerOff;
             match session.send(&r) {
                 Ok(()) if power_off => return Err("Headset powered off".into()),
-                Ok(()) => {}
+                Ok(()) => {
+                    // Some changes need a follow-up query to learn the result.
+                    let follow_up = match r {
+                        // 10-band headsets only report the new curve when asked.
+                        Request::SetEqualizerPreset(_) => Some(Request::GetEqualizer),
+                        // BGM / Cinema can make the equalizer unavailable.
+                        Request::SetBgmMode { .. } | Request::SetCinemaMode(_) => {
+                            Some(Request::GetEqAvailability)
+                        }
+                        _ => None,
+                    };
+                    if let Some(f) = follow_up {
+                        try_send(&mut session, &f)?;
+                    }
+                }
                 Err(SessionError::Io(e)) => return Err(e.to_string()),
                 Err(e) => {
                     let _ = events.send(Event::Warning(e.to_string()));

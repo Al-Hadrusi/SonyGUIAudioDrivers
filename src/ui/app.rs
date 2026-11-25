@@ -94,6 +94,14 @@ struct DeviceView {
     listening: Option<ListeningMode>,
     room: RoomSize,
     surround: Option<Surround>,
+    /// `Some(false)` when the current Listening Mode blocks the equalizer.
+    eq_available: Option<bool>,
+    connection: Option<ConnectionPriority>,
+    nc_amb_button: Option<NcAmbButton>,
+    playback: Option<PlaybackState>,
+    volume: Option<u8>,
+    voice_guidance: Option<bool>,
+    voice_volume: Option<i8>,
 }
 
 impl App {
@@ -584,6 +592,13 @@ impl DeviceView {
             listening: None,
             room: RoomSize::Small,
             surround: None,
+            eq_available: None,
+            connection: None,
+            nc_amb_button: None,
+            playback: None,
+            volume: None,
+            voice_guidance: None,
+            voice_volume: None,
         }
     }
 
@@ -629,6 +644,13 @@ impl DeviceView {
                 });
             }
             Notification::Surround(mode) => self.surround = Some(mode),
+            Notification::EqAvailable(ok) => self.eq_available = Some(ok),
+            Notification::ConnectionPriority(p) => self.connection = Some(p),
+            Notification::NcAmbButton(b) => self.nc_amb_button = Some(b),
+            Notification::Playback(state) => self.playback = Some(state),
+            Notification::Volume(v) => self.volume = Some(v),
+            Notification::VoiceGuidance(on) => self.voice_guidance = Some(on),
+            Notification::VoiceGuidanceVolume(v) => self.voice_volume = Some(v),
             Notification::SpeakToChat(on) => self.speak_to_chat = on,
             Notification::SpeakToChatConfig(cfg) => {
                 let focus = self.stc.focus_on_voice;
@@ -995,6 +1017,8 @@ impl DeviceView {
             }
         });
 
+        self.playback_card(ui);
+
         ui.add_space(12.0);
         card(ui, Some("Connection"), |ui| {
             info_row(ui, "Codec", self.codec.map_or("—", |c| c.label()));
@@ -1096,34 +1120,53 @@ impl DeviceView {
         self.listening_card(ui);
         self.surround_card(ui);
         card(ui, Some("Equalizer"), |ui| {
-            let labels: Vec<&str> = EqPreset::ALL.iter().map(|p| p.label()).collect();
-            let selected = EqPreset::ALL.iter().position(|p| *p == self.eq.preset);
-            if let Some(i) = chips(ui, "eq_presets", &labels, selected) {
-                let preset = EqPreset::ALL[i];
+            let layout = self.eq.layout;
+            let available = self.eq_available != Some(false);
+            if !available {
+                ui.label(
+                    RichText::new("The equalizer can't be used in the current Listening Mode. Switch Listening Mode to Standard to use it.")
+                        .size(12.5)
+                        .color(ACCENT),
+                );
+                ui.add_space(4.0);
+            }
+            let presets = layout.presets();
+            let labels: Vec<&str> = presets.iter().map(|p| p.label()).collect();
+            let selected = presets.iter().position(|p| *p == self.eq.preset);
+            if let Some(i) = chips(ui, "eq_presets", &labels, selected).filter(|_| available) {
+                let preset = presets[i];
                 self.eq.preset = preset;
-                if !preset.is_editable() {
-                    self.eq.bands = preset.default_bands();
+                if !preset.is_editable() && layout == EqLayout::ClearBassFiveBand {
+                    self.eq = Equalizer::classic(preset, preset.default_bands());
                 }
-                // Selecting a preset only (the headset restores its own bands).
+                // Selecting a preset only; the headset reports the preset's curve.
                 self.conn.send(Request::SetEqualizerPreset(preset));
             }
             ui.add_space(8.0);
-            let editable = self.eq.preset.is_editable();
-            let r = eq_graph(ui, &mut self.eq.bands, editable);
+            let editable = available && self.eq.preset.is_editable();
+            let r = eq_graph(
+                ui,
+                self.eq.values_mut(),
+                layout.labels(),
+                layout.range(),
+                layout == EqLayout::ClearBassFiveBand,
+                editable,
+            );
             if r.released || r.changed {
                 self.conn.send(Request::SetEqualizerBands(self.eq));
             }
             if !editable {
-                ui.label(
-                    RichText::new("Select Manual or Custom to adjust the bands. CLEAR BASS boosts low frequencies without distortion.")
-                        .size(12.0)
-                        .color(SUBTEXT),
-                );
+                let hint = if layout == EqLayout::ClearBassFiveBand {
+                    "Select Manual or Custom to adjust the bands. CLEAR BASS boosts low frequencies without distortion."
+                } else {
+                    "Select Manual or Custom to adjust the bands."
+                };
+                ui.label(RichText::new(hint).size(12.0).color(SUBTEXT));
             } else if ui
                 .add(egui::Button::new(RichText::new("Reset").color(ACCENT)).frame(false))
                 .clicked()
             {
-                self.eq.bands = [0; 6];
+                self.eq.values_mut().fill(0);
                 self.conn.send(Request::SetEqualizerBands(self.eq));
             }
         });
@@ -1139,6 +1182,87 @@ impl DeviceView {
                 &mut self.upsampling,
             ) {
                 self.conn.send(Request::SetAudioUpsampling(self.upsampling));
+            }
+        });
+
+        if let Some(current) = self.connection {
+            ui.add_space(12.0);
+            card(ui, Some("Bluetooth Connection Quality"), |ui| {
+                let labels = ["Sound Quality", "Stable Connection"];
+                let mut idx = usize::from(current == ConnectionPriority::StableConnection);
+                if segmented(ui, &labels, &mut idx, true) {
+                    let prio = ConnectionPriority::CHOICES[idx];
+                    self.connection = Some(prio);
+                    self.conn.send(Request::SetConnectionPriority(prio));
+                }
+                ui.label(
+                    RichText::new(format!(
+                        "{}. Changing this briefly interrupts the audio.",
+                        self.connection.unwrap_or_default().label()
+                    ))
+                    .size(12.0)
+                    .color(SUBTEXT),
+                );
+            });
+        }
+    }
+
+    fn playback_card(&mut self, ui: &mut Ui) {
+        if self.playback.is_none() && self.volume.is_none() {
+            return;
+        }
+        ui.add_space(12.0);
+        card(ui, Some("Playback"), |ui| {
+            if let Some(state) = self.playback {
+                let playing = state == PlaybackState::Playing;
+                let w = ui.available_width();
+                ui.horizontal(|ui| {
+                    ui.add_space((w - 3.0 * 64.0 - 2.0 * 16.0) / 2.0);
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    if round_icon_button(ui, ModeIcon::Previous, 56.0, false).clicked() {
+                        self.conn.send(Request::Playback(PlaybackControl::Previous));
+                    }
+                    let icon = if playing {
+                        ModeIcon::Pause
+                    } else {
+                        ModeIcon::Play
+                    };
+                    if round_icon_button(ui, icon, 64.0, true).clicked() {
+                        let control = if playing {
+                            PlaybackControl::Pause
+                        } else {
+                            PlaybackControl::Play
+                        };
+                        self.playback = Some(if playing {
+                            PlaybackState::Paused
+                        } else {
+                            PlaybackState::Playing
+                        });
+                        self.conn.send(Request::Playback(control));
+                    }
+                    if round_icon_button(ui, ModeIcon::Next, 56.0, false).clicked() {
+                        self.conn.send(Request::Playback(PlaybackControl::Next));
+                    }
+                });
+            }
+            if let Some(mut volume) = self.volume {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Volume").size(14.5).color(TEXT));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(volume.to_string())
+                                .size(15.0)
+                                .color(ACCENT)
+                                .strong(),
+                        );
+                    });
+                });
+                let r = level_slider(ui, &mut volume, 0, VOLUME_MAX, true);
+                if r.changed || r.released {
+                    self.volume = Some(volume);
+                    self.conn.send(Request::SetVolume(volume));
+                }
             }
         });
     }
@@ -1221,6 +1345,23 @@ impl DeviceView {
                 self.conn
                     .send(Request::SetPauseWhenTakenOff(self.pause_when_off));
             }
+            if let Some(current) = self.nc_amb_button {
+                divider(ui);
+                ui.label(RichText::new("NC/AMB button").size(15.5).color(TEXT));
+                let mut chosen = current;
+                egui::ComboBox::from_id_salt("nc_amb_button")
+                    .width(ui.available_width())
+                    .selected_text(chosen.label())
+                    .show_ui(ui, |ui| {
+                        for b in NcAmbButton::ALL {
+                            ui.selectable_value(&mut chosen, b, b.label());
+                        }
+                    });
+                if chosen != current {
+                    self.nc_amb_button = Some(chosen);
+                    self.conn.send(Request::SetNcAmbButton(chosen));
+                }
+            }
             divider(ui);
             ui.label(RichText::new("Automatic power off").size(15.5).color(TEXT));
             let before = self.auto_power_off;
@@ -1237,6 +1378,38 @@ impl DeviceView {
                     .send(Request::SetAutoPowerOff(self.auto_power_off));
             }
         });
+
+        if let Some(mut on) = self.voice_guidance {
+            ui.add_space(12.0);
+            card(ui, None, |ui| {
+                if switch_row(
+                    ui,
+                    "Voice guidance",
+                    Some("Spoken notices for power, battery and mode changes"),
+                    &mut on,
+                ) {
+                    self.voice_guidance = Some(on);
+                    self.conn.send(Request::SetVoiceGuidance(on));
+                }
+                if let (true, Some(vol)) = (on, self.voice_volume) {
+                    ui.label(
+                        RichText::new("Voice guidance volume")
+                            .size(14.0)
+                            .color(SUBTEXT),
+                    );
+                    let labels = ["-2", "-1", "0", "+1", "+2"];
+                    let (lo, _) = VOICE_VOLUME_RANGE;
+                    let mut idx = usize::try_from(i16::from(vol) - i16::from(lo))
+                        .unwrap_or(2)
+                        .min(4);
+                    if segmented(ui, &labels, &mut idx, true) {
+                        let v = i8::try_from(idx).unwrap_or(2) + lo;
+                        self.voice_volume = Some(v);
+                        self.conn.send(Request::SetVoiceGuidanceVolume(v));
+                    }
+                }
+            });
+        }
 
         ui.add_space(12.0);
         card(ui, Some("Device information"), |ui| {

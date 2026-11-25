@@ -36,7 +36,7 @@ pub struct SimulatedHeadset {
     seq: u8,
     ambient: AmbientSound,
     eq: Equalizer,
-    custom: [[i8; 6]; 3],
+    custom: [[i8; 10]; 3],
     upsampling: bool,
     speak_to_chat: bool,
     stc: SpeakToChatConfig,
@@ -50,6 +50,12 @@ pub struct SimulatedHeadset {
     listening: Option<(ListeningMode, RoomSize)>,
     /// `None` when the model has no virtual surround.
     surround: Option<Surround>,
+    /// V2-only features (`None` on V1 models).
+    connection: Option<ConnectionPriority>,
+    nc_amb_button: Option<NcAmbButton>,
+    playback: Option<PlaybackState>,
+    volume: Option<u8>,
+    voice_guidance: Option<(bool, i8)>,
     /// Every request received, for tests.
     pub received: Vec<Request>,
 }
@@ -74,8 +80,12 @@ impl SimulatedHeadset {
             outbox: VecDeque::new(),
             seq: 0,
             ambient: AmbientSound::default(),
-            eq: Equalizer::default(),
-            custom: [[0; 6]; 3],
+            eq: if upper.contains("XM6") {
+                Equalizer::ten_band(EqPreset::Off, [0; 10])
+            } else {
+                Equalizer::default()
+            },
+            custom: [[0; 10]; 3],
             upsampling: true,
             speak_to_chat: false,
             stc: SpeakToChatConfig::default(),
@@ -89,12 +99,18 @@ impl SimulatedHeadset {
                 .contains("XM6")
                 .then_some((ListeningMode::Standard, RoomSize::Small)),
             surround: (dialect == Dialect::V1).then_some(Surround::Off),
+            connection: dialect.is_v2().then_some(ConnectionPriority::SoundQuality),
+            nc_amb_button: (dialect.is_v2() && !upper.starts_with("WF"))
+                .then_some(NcAmbButton::NcAmbientOff),
+            playback: dialect.is_v2().then_some(PlaybackState::Paused),
+            volume: dialect.is_v2().then_some(12),
+            voice_guidance: dialect.is_v2().then_some((true, 0)),
             received: Vec::new(),
         }
     }
 
     fn emit(&mut self, n: Notification) {
-        let frame = Frame::new(DataType::DataMdr, self.seq, n.payload(self.dialect));
+        let frame = Frame::new(n.data_type(), self.seq, n.payload(self.dialect));
         self.seq ^= 1;
         self.outbox.extend(frame.encode());
     }
@@ -133,9 +149,14 @@ impl SimulatedHeadset {
         }
     }
 
-    fn handle_request(&mut self, payload: &[u8]) {
+    fn handle_request(&mut self, data_type: DataType, payload: &[u8]) {
         // Real headsets silently ignore what they do not understand.
-        let Some(request) = Request::decode(payload, self.dialect) else {
+        let decoded = if data_type == DataType::DataMdrNo2 {
+            Request::decode_t2(payload, self.dialect)
+        } else {
+            Request::decode(payload, self.dialect)
+        };
+        let Some(request) = decoded else {
             return;
         };
         self.received.push(request.clone());
@@ -171,14 +192,26 @@ impl SimulatedHeadset {
             }
             Request::GetEqualizer => self.emit(Notification::Equalizer(self.eq)),
             Request::SetEqualizerPreset(preset) => {
-                let bands = match slot(preset) {
-                    Some(i) => self.custom[i],
-                    None => preset.default_bands(),
+                let layout = self.eq.layout;
+                let mut eq = Equalizer {
+                    preset,
+                    layout,
+                    bands: [0; 10],
                 };
-                self.eq = Equalizer { preset, bands };
+                match slot(preset) {
+                    Some(i) => eq.bands = self.custom[i],
+                    None if layout == EqLayout::ClearBassFiveBand => {
+                        eq = Equalizer::classic(preset, preset.default_bands());
+                    }
+                    None => {}
+                }
+                self.eq = eq;
                 self.emit(Notification::Equalizer(self.eq));
             }
             Request::SetEqualizerBands(eq) => {
+                if eq.layout != self.eq.layout {
+                    return; // a real headset ignores the wrong format
+                }
                 if let Some(i) = slot(eq.preset) {
                     self.custom[i] = eq.bands;
                 }
@@ -266,6 +299,82 @@ impl SimulatedHeadset {
                     self.emit(Notification::Surround(mode));
                 }
             }
+            Request::GetEqAvailability => {
+                if self.dialect.is_v2() {
+                    let blocked =
+                        matches!(self.listening, Some((m, _)) if m != ListeningMode::Standard);
+                    self.emit(Notification::EqAvailable(!blocked));
+                }
+            }
+            Request::GetConnectionPriority => {
+                if let Some(p) = self.connection {
+                    self.emit(Notification::ConnectionPriority(p));
+                }
+            }
+            Request::SetConnectionPriority(p) => {
+                if self.connection.is_some() {
+                    self.connection = Some(p);
+                    self.emit(Notification::ConnectionPriority(p));
+                }
+            }
+            Request::GetNcAmbButton => {
+                if let Some(b) = self.nc_amb_button {
+                    self.emit(Notification::NcAmbButton(b));
+                }
+            }
+            Request::SetNcAmbButton(b) => {
+                if self.nc_amb_button.is_some() {
+                    self.nc_amb_button = Some(b);
+                    self.emit(Notification::NcAmbButton(b));
+                }
+            }
+            Request::GetPlayback => {
+                if let Some(state) = self.playback {
+                    self.emit(Notification::Playback(state));
+                }
+            }
+            Request::Playback(control) => {
+                if self.playback.is_some() {
+                    let state = match control {
+                        PlaybackControl::Pause => PlaybackState::Paused,
+                        _ => PlaybackState::Playing,
+                    };
+                    self.playback = Some(state);
+                    self.emit(Notification::Playback(state));
+                }
+            }
+            Request::GetVolume => {
+                if let Some(v) = self.volume {
+                    self.emit(Notification::Volume(v));
+                }
+            }
+            Request::SetVolume(v) => {
+                if self.volume.is_some() {
+                    self.volume = Some(v);
+                    self.emit(Notification::Volume(v));
+                }
+            }
+            Request::GetVoiceGuidance | Request::GetVoiceGuidanceVolume => {
+                if let Some((on, vol)) = self.voice_guidance {
+                    self.emit(if request == Request::GetVoiceGuidance {
+                        Notification::VoiceGuidance(on)
+                    } else {
+                        Notification::VoiceGuidanceVolume(vol)
+                    });
+                }
+            }
+            Request::SetVoiceGuidance(on) => {
+                if let Some((_, vol)) = self.voice_guidance {
+                    self.voice_guidance = Some((on, vol));
+                    self.emit(Notification::VoiceGuidance(on));
+                }
+            }
+            Request::SetVoiceGuidanceVolume(vol) => {
+                if let Some((on, _)) = self.voice_guidance {
+                    self.voice_guidance = Some((on, vol));
+                    self.emit(Notification::VoiceGuidanceVolume(vol));
+                }
+            }
             Request::PowerOff => self.powered_off = true,
         }
     }
@@ -315,7 +424,7 @@ impl Transport for SimulatedHeadset {
                 continue;
             }
             self.outbox.extend(Frame::ack_for(frame.seq).encode());
-            self.handle_request(&frame.payload);
+            self.handle_request(frame.data_type, &frame.payload);
         }
         Ok(())
     }

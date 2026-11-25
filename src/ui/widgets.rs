@@ -7,7 +7,7 @@ use eframe::egui::{
 };
 
 use super::theme::*;
-use headphones_control::protocol::{Battery, EQ_BAND_LABELS, EQ_MAX, EQ_MIN};
+use headphones_control::protocol::Battery;
 use headphones_control::transport::FormFactor;
 
 /// A rounded card with an optional title.
@@ -210,6 +210,27 @@ pub fn mode_button(
     resp
 }
 
+/// A plain round button with an icon (used for playback controls).
+pub fn round_icon_button(ui: &mut Ui, icon: ModeIcon, diameter: f32, primary: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(diameter, diameter), Sense::click());
+    let p = ui.painter();
+    let fill = if primary {
+        ACCENT
+    } else if resp.hovered() {
+        CARD_HI.gamma_multiply(1.4)
+    } else {
+        CARD_HI
+    };
+    p.circle_filled(rect.center(), diameter / 2.0, fill);
+    draw_mode_icon(
+        p,
+        icon,
+        rect.center(),
+        if primary { Color32::BLACK } else { TEXT },
+    );
+    resp
+}
+
 #[derive(Clone, Copy)]
 pub enum ModeIcon {
     NoiseCancelling,
@@ -221,11 +242,46 @@ pub enum ModeIcon {
     Bgm,
     /// Listening mode "Cinema": a screen.
     Cinema,
+    Play,
+    Pause,
+    Next,
+    Previous,
 }
 
 fn draw_mode_icon(p: &egui::Painter, icon: ModeIcon, c: Pos2, color: Color32) {
     let s = Stroke::new(2.2, color);
+    let tri = |a: Pos2, b: Pos2, c: Pos2| Shape::convex_polygon(vec![a, b, c], color, Stroke::NONE);
     match icon {
+        ModeIcon::Play => {
+            p.add(tri(
+                c + vec2(-6.0, -10.0),
+                c + vec2(10.0, 0.0),
+                c + vec2(-6.0, 10.0),
+            ));
+        }
+        ModeIcon::Pause => {
+            for dx in [-5.0f32, 5.0] {
+                let bar = Rect::from_center_size(c + vec2(dx, 0.0), vec2(5.0, 20.0));
+                p.rect_filled(bar, CornerRadius::same(1), color);
+            }
+        }
+        ModeIcon::Next | ModeIcon::Previous => {
+            let dir = if matches!(icon, ModeIcon::Next) {
+                1.0
+            } else {
+                -1.0
+            };
+            for off in [-7.0f32, 2.0] {
+                let o = c + vec2(off * dir, 0.0);
+                p.add(tri(
+                    o + vec2(0.0, -8.0),
+                    o + vec2(9.0 * dir, 0.0),
+                    o + vec2(0.0, 8.0),
+                ));
+            }
+            let bar = Rect::from_center_size(c + vec2(12.5 * dir, 0.0), vec2(2.5, 16.0));
+            p.rect_filled(bar, CornerRadius::same(1), color);
+        }
         ModeIcon::Standard => {
             // Beamed eighth notes.
             p.circle_filled(c + vec2(-7.0, 8.0), 4.5, color);
@@ -507,19 +563,36 @@ pub fn product_art(ui: &mut Ui, form: FormFactor) {
     }
 }
 
-/// Interactive equalizer graph: six draggable points joined by a smooth curve.
-/// Returns `(changed, released)`.
-pub fn eq_graph(ui: &mut Ui, bands: &mut [i8; 6], editable: bool) -> SliderResult {
+/// Interactive equalizer graph: one draggable point per band, joined by a
+/// smooth curve. `range` is the value range; with `highlight_first` the first
+/// band (Clear Bass) is labelled in the accent colour.
+pub fn eq_graph(
+    ui: &mut Ui,
+    bands: &mut [i8],
+    labels: &[&str],
+    range: (i8, i8),
+    highlight_first: bool,
+    editable: bool,
+) -> SliderResult {
+    let (eq_min, eq_max) = range;
+    if bands.is_empty() {
+        return SliderResult::default();
+    }
     let w = ui.available_width();
     let h = 210.0;
     let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let plot = Rect::from_min_max(rect.min + vec2(28.0, 12.0), rect.max - vec2(8.0, 38.0));
     let p = ui.painter().clone();
-    let span = f32::from(EQ_MAX - EQ_MIN);
-    let y_of = |v: f32| plot.bottom() - (v - f32::from(EQ_MIN)) / span * plot.height();
-    let v_of = |y: f32| ((plot.bottom() - y) / plot.height() * span + f32::from(EQ_MIN)).round();
+    let span = f32::from(eq_max - eq_min).max(1.0);
+    let y_of = |v: f32| plot.bottom() - (v - f32::from(eq_min)) / span * plot.height();
+    let v_of = |y: f32| ((plot.bottom() - y) / plot.height() * span + f32::from(eq_min)).round();
 
-    for (v, label) in [(EQ_MAX, "+10"), (0, "0"), (EQ_MIN, "-10")] {
+    let (top_label, bottom_label) = (format!("{eq_max:+}"), format!("{eq_min}"));
+    for (v, label) in [
+        (eq_max, top_label.as_str()),
+        (0, "0"),
+        (eq_min, bottom_label.as_str()),
+    ] {
         let y = y_of(f32::from(v));
         p.line_segment(
             [pos2(plot.left(), y), pos2(plot.right(), y)],
@@ -543,13 +616,20 @@ pub fn eq_graph(ui: &mut Ui, bands: &mut [i8; 6], editable: bool) -> SliderResul
             [pos2(*x, plot.top()), pos2(*x, plot.bottom())],
             Stroke::new(1.0, DIVIDER),
         );
-        let label = EQ_BAND_LABELS[i];
+        let label = labels.get(i).copied().unwrap_or("");
+        let special = highlight_first && i == 0;
         p.text(
             pos2(*x, plot.bottom() + 18.0),
             Align2::CENTER_CENTER,
             label,
-            FontId::proportional(if i == 0 { 9.5 } else { 11.5 }),
-            if i == 0 { ACCENT } else { SUBTEXT },
+            FontId::proportional(if special {
+                9.5
+            } else if n > 6 {
+                10.5
+            } else {
+                11.5
+            }),
+            if special { ACCENT } else { SUBTEXT },
         );
     }
 
