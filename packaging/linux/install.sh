@@ -1,6 +1,7 @@
 #!/bin/sh
-# Build and install Headphones Control for the current user (or system-wide
-# with PREFIX=/usr/local and sudo). Run from the repository root:
+# Install Headphones Control for the current user (or system-wide with
+# PREFIX=/usr/local and sudo). Run from the repository root (builds the app)
+# or from an extracted release download (uses the bundled program):
 #
 #   ./packaging/linux/install.sh            # installs into ~/.local
 #   ./packaging/linux/install.sh uninstall  # removes it again
@@ -18,9 +19,19 @@ if [ "${1:-}" = "uninstall" ]; then
     exit 0
 fi
 
-cargo build --release --locked
-install -Dm755 target/release/headphones-control "$BIN"
-install -Dm644 packaging/linux/headphones-control.desktop "$DESKTOP"
+if [ -x ./headphones-control ]; then
+    # Extracted release download: use the bundled program.
+    SRC=./headphones-control
+else
+    cargo build --release --locked
+    SRC=target/release/headphones-control
+fi
+install -Dm755 "$SRC" "$BIN"
+# Point the launcher at the installed program, so it works even when
+# $PREFIX/bin is not on PATH.
+mkdir -p "$(dirname "$DESKTOP")"
+sed "s|^Exec=.*|Exec=\"$BIN\"|" packaging/linux/headphones-control.desktop > "$DESKTOP"
+chmod 644 "$DESKTOP"
 install -Dm644 assets/headphones-control.svg "$ICON_SVG"
 install -Dm644 assets/headphones-control-256.png "$ICON_PNG"
 

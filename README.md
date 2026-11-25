@@ -37,14 +37,16 @@ illustration, battery levels, and **Status / Sound / System** tabs.
 | DSEE Extreme (upscaling) | Sound |
 | Bluetooth connection quality: sound quality / stable connection | Sound |
 | Speak-to-Chat sensitivity, voice focus, mode duration | System |
-| Touch sensor control panel | System |
+| Touch sensor control panel (V1); on V2 headsets, every on/off setting the headset declares, e.g. touch panel and multipoint on the WH-1000XM6 | System |
 | Pause when taken off | System |
 | Automatic power off | System |
 | NC/AMB button: what the button cycles through | System |
 | Voice guidance on/off and volume | System |
 | Firmware version, power off, disconnect | System |
 | Remembers the last headset and reconnects when it is switched on | Device list |
-| System tray icon: switch NC / Ambient / Off, keeps running when the window is closed | Tray |
+| Low-battery desktop notification (20 % and 10 %) | Notifications |
+| Remembers the last tab and the window size | — |
+| System tray icon with battery bar: switch NC / Ambient / Off, keeps running when the window is closed | Tray |
 
 Both protocol generations are supported and detected automatically from the headset's init reply:
 
@@ -58,6 +60,19 @@ For development, four **simulated devices** are built in: WH-1000XM6 (V2 with Li
 WH-1000XM5 (V2), WF-1000XM5 (V2 earbuds) and WH-1000XM4 (V1 with Surround). They speak the real wire
 protocol, so every control can be tried without hardware. They are hidden unless the app is started
 with `--demo`.
+
+## Download
+
+Ready-to-run builds for Linux (x86_64) and Windows are attached to each
+[release](https://github.com/Al-Hadrusi/SonyGUIAudioDrivers/releases).
+
+* **Linux:** extract the `.tar.gz` and run `./packaging/linux/install.sh` inside it. This installs
+  the program, an application-menu entry and the icon into `~/.local`. Or just run
+  `./headphones-control` from the extracted folder.
+* **Windows:** extract the `.zip` and run `headphones-control.exe`. Pair the headset in Windows'
+  Bluetooth settings first.
+
+`SHA256SUMS` lists the checksums of the downloads.
 
 ## Building and running
 
@@ -159,18 +174,26 @@ Then pair the headset (for example with `bluetoothctl`: `scan on`, `pair <MAC>`,
 
 #### Installing with Portage
 
-`packaging/gentoo` is a small overlay with a live ebuild (`media-sound/headphones-control-9999`,
-USE flags `bluetooth` and `tray`, both on by default). Register it with Portage by running this
-from the root of your clone:
+`packaging/gentoo` is a small overlay for `media-sound/headphones-control`, with a release ebuild
+(`0.1.0`, keyword `~amd64`) and a live ebuild (`9999`, built from git). USE flags: `bluetooth`,
+`notifications` and `tray`, all on by default. Register the overlay with Portage by running this from
+the root of your clone:
 
 ```bash
 printf '[headphones-control]\nlocation = %s\n' "$PWD/packaging/gentoo" | sudo tee /etc/portage/repos.conf/headphones-control.conf
 ```
 
-Live ebuilds are not keyworded, so accept it:
+Accept the testing keyword. Use `**` instead of `~amd64` for the live version:
 
 ```bash
-echo "media-sound/headphones-control **" | sudo tee /etc/portage/package.accept_keywords/headphones-control
+echo "media-sound/headphones-control ~amd64" | sudo tee /etc/portage/package.accept_keywords/headphones-control
+```
+
+The overlay has no `Manifest` (it would list checksums for ~400 crate files), so create it once.
+This downloads the sources:
+
+```bash
+sudo ebuild packaging/gentoo/media-sound/headphones-control/headphones-control-0.1.0.ebuild manifest
 ```
 
 Then install:
@@ -203,10 +226,17 @@ SONY_DEBUG=1 cargo run --release
 Lines starting with `TX` are commands sent to the headset; lines starting with `RX` are its replies.
 If a setting doesn't apply, open an issue with this output and your headset model.
 
-### Windows / macOS
+### Windows
 
-The app builds and runs, but only with the simulated devices (`--demo`). Real Bluetooth is only implemented for Linux so
-far: add a `Transport` implementation in `src/transport/` to support another platform.
+Real Bluetooth works on Windows 10 and 11 through the WinRT Bluetooth API. Pair the headset in
+*Settings → Bluetooth & devices*, then start the app. The tray icon, desktop notifications and
+the application-menu entry are Linux-only.
+
+### macOS
+
+Not supported yet. macOS only offers Bluetooth through Objective-C frameworks (IOBluetooth), and
+every Rust binding to them requires `unsafe` code, which this project forbids. The app builds and
+runs on macOS with the simulated devices (`--demo`) only.
 
 To build without Bluetooth support (no D-Bus needed):
 
@@ -219,13 +249,16 @@ cargo run --release --no-default-features
 ```
 src/
 ├── lib.rs                  #![forbid(unsafe_code)]
-├── config.rs               settings file (last headset, auto-connect)
+├── config.rs               settings file (last headset, auto-connect, tab, window size)
+├── battery_alert.rs        when to warn about a low battery
+├── desktop_entry.rs        application-menu entry and icon (Linux)
 ├── protocol/
 │   ├── frame.rs            framing: 0x3E … 0x3C, escaping, checksum, incremental decoder
 │   ├── message.rs          request builders / notification parsers (bounds-checked, never panic)
 │   └── session.rs          sequence numbers, ACKs, retries
 ├── transport/
 │   ├── bluetooth.rs        BlueZ RFCOMM client (Linux, `bluetooth` feature)
+│   ├── windows_bt.rs       WinRT RFCOMM client (Windows, `bluetooth` feature)
 │   └── simulator.rs        in-process headset emulator
 ├── worker.rs               background connection thread (GUI never blocks on I/O)
 └── ui/                     egui front-end (theme, custom widgets, screens, tray icon)
@@ -254,6 +287,13 @@ cargo test
 The tests cover frame encoding and escaping, checksum and oversize rejection, payload encoding,
 fuzz-style truncated input, and full round-trips between the session/worker and the simulated
 headset.
+
+## Releasing
+
+1. Bump `version` in `Cargo.toml`, then run `cargo build` to update `Cargo.lock`.
+2. Generate the release ebuild: `python3 packaging/gentoo/make-release-ebuild.py`.
+3. Commit, tag `vX.Y.Z` and push the tag. The *Release* workflow builds the Linux and Windows
+   downloads and publishes the GitHub release.
 
 ## License
 

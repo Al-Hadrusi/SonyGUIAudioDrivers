@@ -6,6 +6,7 @@
 	</maintainer>
 	<use>
 		<flag name="bluetooth">Control real headsets over Bluetooth via BlueZ (otherwise only the built-in simulated devices work)</flag>
+		<flag name="notifications">Desktop notification when the headphone battery runs low</flag>
 		<flag name="tray">System tray icon (StatusNotifierItem) to switch noise canceling and keep the app running when its window is closed</flag>
 	</use>
 	<upstream>
