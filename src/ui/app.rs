@@ -70,6 +70,7 @@ struct DeviceView {
     pause_when_off: bool,
     auto_power_off: AutoPowerOff,
     confirm_power_off: bool,
+    dialect: Dialect,
 }
 
 impl App {
@@ -127,11 +128,15 @@ impl App {
             Screen::Connecting { conn, .. } => {
                 while let Ok(ev) = conn.events.try_recv() {
                     match ev {
-                        Event::Connected { device, form } => {
+                        Event::Connected {
+                            device,
+                            form,
+                            dialect,
+                        } => {
                             if let Screen::Connecting { conn, .. } =
                                 std::mem::replace(&mut self.screen, Screen::Devices)
                             {
-                                let mut view = DeviceView::new(device, form, conn);
+                                let mut view = DeviceView::new(device, form, dialect, conn);
                                 view.tab = self.start_tab;
                                 next = Some(Screen::Device(Box::new(view)));
                             }
@@ -142,7 +147,7 @@ impl App {
                             next = Some(Screen::Devices);
                             break;
                         }
-                        Event::Warning(_) | Event::Update(_) => {}
+                        Event::Warning(_) | Event::Update(_) | Event::DialectChanged(_) => {}
                     }
                 }
             }
@@ -156,6 +161,7 @@ impl App {
                             next = Some(Screen::Devices);
                             break;
                         }
+                        Event::DialectChanged(d) => view.dialect = d,
                         Event::Connected { .. } => {}
                     }
                 }
@@ -429,10 +435,11 @@ fn connecting_screen(ui: &mut Ui, device: &DeviceInfo, since: Instant) -> bool {
 // ---------------------------------------------------------------------------
 
 impl DeviceView {
-    fn new(info: DeviceInfo, form: FormFactor, conn: Connection) -> Self {
+    fn new(info: DeviceInfo, form: FormFactor, dialect: Dialect, conn: Connection) -> Self {
         Self {
             info,
             form,
+            dialect,
             conn,
             tab: Tab::Status,
             ambient: AmbientSound::default(),
@@ -467,13 +474,24 @@ impl DeviceView {
             Notification::FirmwareVersion(v) => self.firmware = Some(v),
             Notification::Battery { kind, left, right } => match kind {
                 BatteryKind::Single => self.battery = Some(left),
-                BatteryKind::Dual => {
+                BatteryKind::Dual | BatteryKind::Dual2 => {
                     self.battery = Some(left);
                     self.battery_right = right;
                 }
                 BatteryKind::Case => self.battery_case = Some(left),
             },
-            Notification::InitReply | Notification::Unknown(_) => {}
+            Notification::SpeakToChat(on) => self.speak_to_chat = on,
+            Notification::SpeakToChatConfig(cfg) => {
+                let focus = self.stc.focus_on_voice;
+                self.stc = cfg;
+                if self.dialect.is_v2() {
+                    self.stc.focus_on_voice = focus;
+                }
+            }
+            Notification::TouchSensor(on) => self.touch_panel = on,
+            Notification::PauseWhenTakenOff(on) => self.pause_when_off = on,
+            Notification::AutoPowerOff(apo) => self.auto_power_off = apo,
+            Notification::InitReply(_) | Notification::Unknown(_) => {}
         }
     }
 
@@ -722,7 +740,8 @@ impl DeviceView {
             } else if matches!(
                 self.ambient.mode,
                 AmbientMode::NoiseCancelling | AmbientMode::WindReduction
-            ) {
+            ) && self.dialect.supports_wind_reduction()
+            {
                 ui.add_space(6.0);
                 divider(ui);
                 ui.add_space(8.0);
@@ -730,7 +749,7 @@ impl DeviceView {
                 if switch_row(
                     ui,
                     "Wind Noise Reduction",
-                    Some("Reduces wind noise outdoors (supported models)"),
+                    Some("Reduces wind noise outdoors"),
                     &mut wind,
                 ) {
                     self.ambient.mode = if wind {
@@ -741,7 +760,7 @@ impl DeviceView {
                     self.last_on_mode = self.ambient.mode;
                     self.send_ambient(false);
                 }
-            } else {
+            } else if self.ambient.mode == AmbientMode::Off {
                 ui.label(
                     RichText::new("Noise canceling and ambient sound are turned off.")
                         .size(12.5)
@@ -804,13 +823,13 @@ impl DeviceView {
                     self.eq.bands = preset.default_bands();
                 }
                 // Selecting a preset only (the headset restores its own bands).
-                self.conn.send(Request::SetEqualizer(self.eq));
+                self.conn.send(Request::SetEqualizerPreset(preset));
             }
             ui.add_space(8.0);
             let editable = self.eq.preset.is_editable();
             let r = eq_graph(ui, &mut self.eq.bands, editable);
             if r.released || r.changed {
-                self.conn.send(Request::SetEqualizer(self.eq));
+                self.conn.send(Request::SetEqualizerBands(self.eq));
             }
             if !editable {
                 ui.label(
@@ -823,7 +842,7 @@ impl DeviceView {
                 .clicked()
             {
                 self.eq.bands = [0; 6];
-                self.conn.send(Request::SetEqualizer(self.eq));
+                self.conn.send(Request::SetEqualizerBands(self.eq));
             }
         });
 
@@ -880,7 +899,9 @@ impl DeviceView {
                         }
                     });
                 ui.add_space(4.0);
-                if switch_row(ui, "Voice focus", None, &mut self.stc.focus_on_voice) {
+                if !self.dialect.is_v2()
+                    && switch_row(ui, "Voice focus", None, &mut self.stc.focus_on_voice)
+                {
                     changed = true;
                 }
                 if changed {
@@ -898,15 +919,17 @@ impl DeviceView {
 
         ui.add_space(12.0);
         card(ui, None, |ui| {
-            if switch_row(
-                ui,
-                "Touch sensor control panel",
-                Some("Control playback and calls by touch"),
-                &mut self.touch_panel,
-            ) {
-                self.conn.send(Request::SetTouchSensor(self.touch_panel));
+            if self.dialect.supports_touch_sensor() {
+                if switch_row(
+                    ui,
+                    "Touch sensor control panel",
+                    Some("Control playback and calls by touch"),
+                    &mut self.touch_panel,
+                ) {
+                    self.conn.send(Request::SetTouchSensor(self.touch_panel));
+                }
+                divider(ui);
             }
-            divider(ui);
             let title = if self.form == FormFactor::Earbuds {
                 "Pause music when earbuds are removed"
             } else {
@@ -923,7 +946,7 @@ impl DeviceView {
                 .width(ui.available_width())
                 .selected_text(self.auto_power_off.label())
                 .show_ui(ui, |ui| {
-                    for a in AutoPowerOff::ALL {
+                    for &a in self.dialect.auto_power_off_options() {
                         ui.selectable_value(&mut self.auto_power_off, a, a.label());
                     }
                 });
@@ -937,6 +960,11 @@ impl DeviceView {
         card(ui, Some("Device information"), |ui| {
             info_row(ui, "Model", &self.info.name);
             info_row(ui, "Firmware", self.firmware.as_deref().unwrap_or("—"));
+            info_row(
+                ui,
+                "Protocol",
+                if self.dialect.is_v2() { "V2" } else { "V1" },
+            );
             info_row(ui, "Address", &self.info.address);
             info_row(ui, "Codec", self.codec.map_or("—", |c| c.label()));
         });

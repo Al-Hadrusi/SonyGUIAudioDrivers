@@ -1,4 +1,6 @@
 //! Reliable request / acknowledge exchange on top of a byte transport.
+//!
+//! Set `SONY_DEBUG=1` to print every frame sent and received to stderr.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -6,11 +8,11 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use super::frame::{DataType, Frame, FrameDecoder};
-use super::message::{Notification, Request};
+use super::message::{Dialect, Notification, ProtocolVersion, Request};
 use crate::transport::Transport;
 
-const ACK_TIMEOUT: Duration = Duration::from_millis(1500);
-const RETRIES: usize = 2;
+const ACK_TIMEOUT: Duration = Duration::from_millis(1000);
+const RETRIES: usize = 1;
 const READ_SLICE: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
@@ -18,6 +20,8 @@ pub enum SessionError {
     Io(io::Error),
     /// The headset never acknowledged a request.
     NoAck(Request),
+    /// This headset generation has no such command.
+    Unsupported(Request),
 }
 
 impl fmt::Display for SessionError {
@@ -25,6 +29,7 @@ impl fmt::Display for SessionError {
         match self {
             SessionError::Io(e) => write!(f, "connection error: {e}"),
             SessionError::NoAck(r) => write!(f, "headset did not acknowledge {r:?}"),
+            SessionError::Unsupported(r) => write!(f, "not supported by this headset: {r:?}"),
         }
     }
 }
@@ -37,6 +42,14 @@ impl From<io::Error> for SessionError {
     }
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Owns a transport and implements the sequence-number / ACK protocol.
 pub struct Session {
     transport: Box<dyn Transport>,
@@ -44,6 +57,8 @@ pub struct Session {
     seq: u8,
     pending: VecDeque<Notification>,
     acked: bool,
+    dialect: Dialect,
+    debug: bool,
     /// Non-fatal problems (bad frames, unparsable messages) for diagnostics.
     pub warnings: Vec<String>,
 }
@@ -56,14 +71,32 @@ impl Session {
             seq: 0,
             pending: VecDeque::new(),
             acked: false,
+            dialect: Dialect::default(),
+            debug: std::env::var_os("SONY_DEBUG").is_some_and(|v| !v.is_empty() && v != "0"),
             warnings: Vec::new(),
         }
+    }
+
+    /// The protocol dialect negotiated so far (updated from the init reply
+    /// and from ambient sound replies).
+    pub fn dialect(&self) -> Dialect {
+        self.dialect
+    }
+
+    pub fn set_dialect(&mut self, dialect: Dialect) {
+        self.dialect = dialect;
     }
 
     /// Send a request and wait for its acknowledgement. Notifications that
     /// arrive meanwhile are queued and returned by [`Session::poll`].
     pub fn send(&mut self, request: &Request) -> Result<(), SessionError> {
-        let frame = Frame::new(DataType::DataMdr, self.seq, request.payload()).encode();
+        let Some(payload) = request.payload(self.dialect) else {
+            return Err(SessionError::Unsupported(request.clone()));
+        };
+        if self.debug {
+            eprintln!("[sony] TX {request:?}: {}", hex(&payload));
+        }
+        let frame = Frame::new(DataType::DataMdr, self.seq, payload).encode();
         for _ in 0..=RETRIES {
             self.acked = false;
             self.transport.write_all(&frame)?;
@@ -73,6 +106,9 @@ impl Session {
                 if self.acked {
                     return Ok(());
                 }
+            }
+            if self.debug {
+                eprintln!("[sony] no ACK, retrying");
             }
         }
         Err(SessionError::NoAck(request.clone()))
@@ -110,8 +146,22 @@ impl Session {
             DataType::DataMdr | DataType::DataMdrNo2 => {
                 self.transport
                     .write_all(&Frame::ack_for(frame.seq).encode())?;
-                match Notification::parse(&frame.payload) {
-                    Ok(n) => self.pending.push_back(n),
+                if frame.data_type == DataType::DataMdrNo2 {
+                    // Secondary channel (voice guidance etc.): not used yet.
+                    if self.debug {
+                        eprintln!("[sony] RX (ch2): {}", hex(&frame.payload));
+                    }
+                    return Ok(());
+                }
+                let parsed = Notification::parse(&frame.payload, self.dialect);
+                if self.debug {
+                    eprintln!("[sony] RX {}: {parsed:?}", hex(&frame.payload));
+                }
+                match parsed {
+                    Ok(n) => {
+                        self.learn(&n, &frame.payload);
+                        self.pending.push_back(n);
+                    }
                     Err(e) => self.warn(format!("unparsable message: {e}")),
                 }
             }
@@ -120,7 +170,28 @@ impl Session {
         Ok(())
     }
 
+    /// Adapt the dialect to what the headset tells us.
+    fn learn(&mut self, n: &Notification, payload: &[u8]) {
+        match n {
+            Notification::InitReply(version) => {
+                self.dialect.version = *version;
+                if self.debug {
+                    eprintln!("[sony] protocol version {version:?}");
+                }
+            }
+            Notification::AmbientSound(_) if self.dialect.version == ProtocolVersion::V2 => {
+                if let Some(t) = Notification::ambient_type_of(payload) {
+                    self.dialect.ambient = t;
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn warn(&mut self, w: String) {
+        if self.debug {
+            eprintln!("[sony] warning: {w}");
+        }
         if self.warnings.len() < 100 {
             self.warnings.push(w);
         }

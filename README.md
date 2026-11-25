@@ -31,8 +31,16 @@ illustration, battery levels, and **Status / Sound / System** tabs.
 | Automatic power off | System |
 | Firmware version, power off, disconnect | System |
 
-Two **simulated devices** (WH-1000XM5 headphones, WF-1000XM5 earbuds) are built in. They speak the
-real wire protocol, so you can try every control without hardware.
+Both protocol generations are supported and detected automatically from the headset's init reply:
+
+* **V1**: WH-1000XM3, WH-1000XM4, WF-1000XM3, ...
+* **V2**: WH-1000XM5, WH-1000XM6, WF-1000XM4, WF-1000XM5, LinkBuds, ...
+
+Settings a model doesn't have (for example the touch sensor toggle on V2, or wind noise reduction on
+the WH-1000XM5) are hidden.
+
+Three **simulated devices** are built in: WH-1000XM5 (V2), WF-1000XM5 (V2 earbuds) and WH-1000XM4
+(V1). They speak the real wire protocol, so you can try every control without hardware.
 
 ## Building and running
 
@@ -103,6 +111,17 @@ sudo systemctl enable --now bluetooth
 
 Then pair the headset (for example with `bluetoothctl`: `scan on`, `pair <MAC>`, `trust <MAC>`,
 `connect <MAC>`) and run `cargo run --release`.
+
+### Troubleshooting
+
+Run with `SONY_DEBUG=1` to print every message exchanged with the headset:
+
+```bash
+SONY_DEBUG=1 cargo run --release
+```
+
+Lines starting with `TX` are commands sent to the headset; lines starting with `RX` are its replies.
+If a setting doesn't apply, open an issue with this output and your headset model.
 
 ### Windows / macOS
 

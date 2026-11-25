@@ -3,10 +3,10 @@
 
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::protocol::Session;
 use crate::protocol::message::*;
+use crate::protocol::{Session, SessionError};
 use crate::transport::{self, DeviceInfo, FormFactor};
 
 #[derive(Debug)]
@@ -20,7 +20,10 @@ pub enum Event {
     Connected {
         device: DeviceInfo,
         form: FormFactor,
+        dialect: Dialect,
     },
+    /// The headset revealed more about its protocol (e.g. wind noise support).
+    DialectChanged(Dialect),
     Update(Notification),
     /// Connection closed; `None` when the user asked for it.
     Disconnected(Option<String>),
@@ -66,6 +69,27 @@ impl Drop for Connection {
     }
 }
 
+fn forward(
+    session: &mut Session,
+    events: &Sender<Event>,
+    wait: Duration,
+) -> Result<Vec<Notification>, String> {
+    let updates = session.poll(wait).map_err(|e| e.to_string())?;
+    for n in &updates {
+        let _ = events.send(Event::Update(n.clone()));
+    }
+    Ok(updates)
+}
+
+/// Send a request, treating "unsupported" and "no ACK" as non-fatal.
+fn try_send(session: &mut Session, request: &Request) -> Result<bool, String> {
+    match session.send(request) {
+        Ok(()) => Ok(true),
+        Err(SessionError::Io(e)) => Err(e.to_string()),
+        Err(_) => Ok(false),
+    }
+}
+
 fn run(
     device: DeviceInfo,
     commands: &Receiver<Command>,
@@ -76,36 +100,101 @@ fn run(
     let mut session = Session::new(transport);
     let form = FormFactor::from_name(&device.name);
 
-    session.send(&Request::Init).map_err(|e| e.to_string())?;
-    let _ = events.send(Event::Connected { device, form });
+    match session.send(&Request::Init) {
+        Ok(()) => {}
+        Err(SessionError::NoAck(_)) => {
+            return Err("The headset did not answer on its control channel. Try reconnecting it in your Bluetooth settings.".into());
+        }
+        Err(e) => return Err(e.to_string()),
+    }
+    // Wait for the init reply: it tells us which protocol generation to use.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut got_init = false;
+    while !got_init && Instant::now() < deadline {
+        let updates = session
+            .poll(Duration::from_millis(50))
+            .map_err(|e| e.to_string())?;
+        got_init = updates
+            .iter()
+            .any(|n| matches!(n, Notification::InitReply(_)));
+    }
+    if session.dialect().is_v2() {
+        // Earbuds usually use the ambient sub-type with wind noise reduction.
+        let ambient = if form == FormFactor::Earbuds {
+            AmbientType::WithWind
+        } else {
+            AmbientType::Basic
+        };
+        session.set_dialect(Dialect::v2(ambient));
+    }
+    let mut dialect = session.dialect();
+    let _ = events.send(Event::Connected {
+        device,
+        form,
+        dialect,
+    });
     wake();
 
-    let mut initial = vec![
-        Request::GetFirmwareVersion,
-        Request::GetCodec,
+    let mut initial = match form {
+        FormFactor::Headphones => vec![Request::GetBattery(BatteryKind::Single)],
+        FormFactor::Earbuds if dialect.is_v2() => vec![
+            Request::GetBattery(BatteryKind::Dual),
+            Request::GetBattery(BatteryKind::Dual2),
+            Request::GetBattery(BatteryKind::Case),
+        ],
+        FormFactor::Earbuds => vec![
+            Request::GetBattery(BatteryKind::Dual),
+            Request::GetBattery(BatteryKind::Case),
+        ],
+    };
+    initial.extend([
         Request::GetAmbientSound,
+        Request::GetCodec,
         Request::GetEqualizer,
+        Request::GetFirmwareVersion,
         Request::GetAudioUpsampling,
-    ];
-    match form {
-        FormFactor::Headphones => initial.insert(0, Request::GetBattery(BatteryKind::Single)),
-        FormFactor::Earbuds => {
-            initial.insert(0, Request::GetBattery(BatteryKind::Case));
-            initial.insert(0, Request::GetBattery(BatteryKind::Dual));
-        }
-    }
+        Request::GetSpeakToChat,
+        Request::GetSpeakToChatConfig,
+        Request::GetTouchSensor,
+        Request::GetPauseWhenTakenOff,
+        Request::GetAutoPowerOff,
+    ]);
+    // Not every model supports every query; missing answers are not fatal.
+    let mut got_ambient = false;
     for request in &initial {
-        // Not every model supports every query; a missing ACK is not fatal.
-        if let Err(e) = session.send(request) {
-            if let crate::protocol::SessionError::Io(_) = e {
-                return Err(e.to_string());
-            }
-            let _ = events.send(Event::Warning(e.to_string()));
+        try_send(&mut session, request)?;
+        let updates = forward(&mut session, events, Duration::from_millis(1))?;
+        got_ambient |= updates
+            .iter()
+            .any(|n| matches!(n, Notification::AmbientSound(_)));
+        wake();
+    }
+    let updates = forward(&mut session, events, Duration::from_millis(300))?;
+    got_ambient |= updates
+        .iter()
+        .any(|n| matches!(n, Notification::AmbientSound(_)));
+    if !got_ambient && dialect.is_v2() {
+        // Try the other ambient-sound sub-type (0x15 <-> 0x17).
+        session.set_dialect(Dialect::v2(dialect.ambient.other()));
+        try_send(&mut session, &Request::GetAmbientSound)?;
+        let updates = forward(&mut session, events, Duration::from_millis(500))?;
+        if !updates
+            .iter()
+            .any(|n| matches!(n, Notification::AmbientSound(_)))
+        {
+            session.set_dialect(dialect);
         }
     }
+    wake();
 
     let mut warned = 0;
     loop {
+        if session.dialect() != dialect {
+            dialect = session.dialect();
+            let _ = events.send(Event::DialectChanged(dialect));
+            wake();
+        }
+
         // Coalesce queued commands: while a slider is dragged the GUI may
         // queue many ambient/EQ updates; only the latest of each kind matters.
         let mut batch: Vec<Request> = Vec::new();
@@ -124,26 +213,19 @@ fn run(
             match session.send(&r) {
                 Ok(()) if power_off => return Err("Headset powered off".into()),
                 Ok(()) => {}
-                Err(crate::protocol::SessionError::Io(e)) => return Err(e.to_string()),
+                Err(SessionError::Io(e)) => return Err(e.to_string()),
                 Err(e) => {
                     let _ = events.send(Event::Warning(e.to_string()));
                 }
             }
         }
 
-        let updates = session
-            .poll(Duration::from_millis(40))
-            .map_err(|e| e.to_string())?;
-        let woke = !updates.is_empty();
-        for n in updates {
-            let _ = events.send(Event::Update(n));
+        if !forward(&mut session, events, Duration::from_millis(40))?.is_empty() {
+            wake();
         }
         while warned < session.warnings.len() {
             let _ = events.send(Event::Warning(session.warnings[warned].clone()));
             warned += 1;
-        }
-        if woke {
-            wake();
         }
     }
 }
@@ -151,7 +233,6 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     #[test]
     fn connection_roundtrip_with_simulated_headset() {
@@ -167,8 +248,9 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             match conn.events.recv_timeout(Duration::from_millis(100)) {
-                Ok(Event::Connected { form, .. }) => {
+                Ok(Event::Connected { form, dialect, .. }) => {
                     assert_eq!(form, FormFactor::Headphones);
+                    assert!(dialect.is_v2());
                     connected = true;
                 }
                 Ok(Event::Update(Notification::FirmwareVersion(_))) if !sent => {
