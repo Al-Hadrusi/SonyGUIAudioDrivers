@@ -96,6 +96,10 @@ Remove it again with:
 
 Use `PREFIX=/usr/local` (with `sudo`) for a system-wide install.
 
+If you start the app with `cargo run`, you can also use **Add** under *App → Application menu* in the
+device list. It adds a launcher that starts the program you are running. On Wayland (e.g. KDE Plasma)
+this entry is also where the taskbar icon comes from.
+
 ### Linux (real headsets)
 
 Bluetooth uses BlueZ over D-Bus, so the D-Bus development package is needed to build:
@@ -178,7 +182,7 @@ sudo emerge --ask media-sound/headphones-control
 
 The tray icon (StatusNotifierItem) works with KDE Plasma, XFCE, LXQt, waybar and GNOME with the
 *AppIndicator* extension. Its menu switches between Noise Canceling, Ambient Sound and Off, and its
-tooltip shows the battery level. On X11, closing the window keeps the app running in the tray (use
+tooltip shows the battery level. If the icon can't be shown, the device list says why under *App*. On X11, closing the window keeps the app running in the tray (use
 **Quit** in the tray menu to exit). On Wayland, and on desktops without a tray, closing the window
 quits as usual.
 

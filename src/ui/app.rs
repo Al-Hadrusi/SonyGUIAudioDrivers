@@ -9,6 +9,7 @@ use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, 
 use super::theme::{self, *};
 use super::widgets::*;
 use headphones_control::config::Config;
+use headphones_control::desktop_entry;
 use headphones_control::protocol::*;
 use headphones_control::transport::{self, DeviceInfo, FormFactor};
 use headphones_control::worker::{Connection, Event};
@@ -48,6 +49,10 @@ pub struct App {
     /// Whether the running scan was started by the user (shows a spinner).
     scan_visible: bool,
     last_auto_attempt: Option<Instant>,
+    /// Whether a `.desktop` entry exists (application menu + Wayland icon).
+    menu_installed: bool,
+    /// Why the tray icon isn't available, if it isn't.
+    tray_note: Option<String>,
     #[cfg(all(feature = "tray", target_os = "linux"))]
     tray: Option<super::tray::Tray>,
     /// Set when "Quit" was chosen in the tray (then closing really quits).
@@ -125,11 +130,18 @@ impl App {
             last_scan: Instant::now(),
             scan_visible: true,
             last_auto_attempt: None,
+            menu_installed: desktop_entry::is_installed(),
+            tray_note: None,
             #[cfg(all(feature = "tray", target_os = "linux"))]
-            tray: super::tray::Tray::spawn(&cc.egui_ctx),
+            tray: None,
             #[cfg(all(feature = "tray", target_os = "linux"))]
             quitting: false,
         };
+        #[cfg(all(feature = "tray", target_os = "linux"))]
+        match super::tray::Tray::spawn(&cc.egui_ctx) {
+            Ok(tray) => app.tray = Some(tray),
+            Err(e) => app.tray_note = Some(e),
+        }
         app.rescan(&cc.egui_ctx, true);
         if let Some(model) = opts.demo {
             let device = DeviceInfo {
@@ -331,6 +343,8 @@ impl eframe::App for App {
                             self.device_note.as_deref(),
                             self.scanning.is_some() && self.scan_visible,
                             auto,
+                            self.menu_installed,
+                            self.tray_note.as_deref(),
                         );
                     }
                     Screen::Connecting { device, since, .. } => {
@@ -351,6 +365,24 @@ impl eframe::App for App {
                     Action::SetAutoConnect(on) => {
                         self.config.auto_connect = on;
                         self.save_config();
+                    }
+                    Action::AddToMenu(add) => {
+                        let result = if add {
+                            desktop_entry::install()
+                        } else {
+                            desktop_entry::uninstall()
+                        };
+                        match result {
+                            Ok(()) => self.toast(if add {
+                                "Added to the application menu"
+                            } else {
+                                "Removed from the application menu"
+                            }),
+                            Err(e) => {
+                                self.toast(format!("Could not update the application menu: {e}"))
+                            }
+                        }
+                        self.menu_installed = desktop_entry::is_installed();
                     }
                     Action::Cancel => {
                         // The user left on purpose: don't reconnect behind their back.
@@ -449,6 +481,8 @@ enum Action {
     Rescan,
     Connect(DeviceInfo),
     SetAutoConnect(bool),
+    /// Add (`true`) or remove the application-menu entry.
+    AddToMenu(bool),
     Cancel,
 }
 
@@ -463,6 +497,8 @@ fn devices_screen(
     scanning: bool,
     // Remembered device address and whether auto-connect is on.
     auto: Option<(&str, bool)>,
+    menu_installed: bool,
+    tray_note: Option<&str>,
 ) -> Action {
     let mut action = Action::None;
     egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
@@ -520,6 +556,33 @@ fn devices_screen(
                 }
             });
         }
+        ui.add_space(8.0);
+        section_label(ui, "App");
+        card(ui, None, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(ui.available_width() - 90.0);
+                    ui.label(RichText::new("Application menu").size(15.5).color(TEXT));
+                    let sub = if menu_installed {
+                        "Headphones Control is in your application menu."
+                    } else {
+                        "Add a launcher and icon to your application menu (also shows the app icon in the taskbar on Wayland)."
+                    };
+                    ui.label(RichText::new(sub).size(12.5).color(SUBTEXT));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let (label, add) = if menu_installed { ("Remove", false) } else { ("Add", true) };
+                    if ui.add(egui::Button::new(RichText::new(label).color(ACCENT)).frame(false)).clicked() {
+                        action = Action::AddToMenu(add);
+                    }
+                });
+            });
+            if let Some(note) = tray_note {
+                divider(ui);
+                ui.label(RichText::new("Tray icon not available").size(15.5).color(TEXT));
+                ui.label(RichText::new(note).size(12.0).color(MUTED));
+            }
+        });
         if !demo.is_empty() {
             ui.add_space(8.0);
             section_label(ui, "Demo (simulated)");

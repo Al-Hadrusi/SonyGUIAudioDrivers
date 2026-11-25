@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod desktop_entry;
 pub mod protocol;
 pub mod transport;
 pub mod worker;

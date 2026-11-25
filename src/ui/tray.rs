@@ -76,9 +76,9 @@ impl ksni::Tray for TrayModel {
         "Headphones Control".into()
     }
 
-    fn icon_name(&self) -> String {
-        "headphones-control".into()
-    }
+    // No `icon_name`: Plasma prefers a theme icon name over the pixmap and
+    // shows nothing when the name isn't installed (e.g. with `cargo run`).
+    // The pixmap always works.
 
     fn icon_pixmap(&self) -> Vec<Icon> {
         self.icon.clone()
@@ -174,9 +174,9 @@ pub struct Tray {
 }
 
 impl Tray {
-    /// Start the tray. Returns `None` when there is no session D-Bus or no
-    /// tray host (the app then works without it).
-    pub fn spawn(ctx: &egui::Context) -> Option<Self> {
+    /// Start the tray. Fails when there is no session D-Bus or no tray host
+    /// (the app then works without it).
+    pub fn spawn(ctx: &egui::Context) -> Result<Self, String> {
         let (tx, commands) = mpsc::channel();
         // `spawn` only succeeds once a tray host (StatusNotifierWatcher) has
         // accepted the icon, so it starts out visible. `watcher_offline` /
@@ -190,7 +190,7 @@ impl Tray {
             available: Arc::clone(&available),
         };
         match model.spawn() {
-            Ok(handle) => Some(Self {
+            Ok(handle) => Ok(Self {
                 handle,
                 commands,
                 available,
@@ -198,7 +198,7 @@ impl Tray {
             }),
             Err(e) => {
                 eprintln!("System tray unavailable: {e}");
-                None
+                Err(format!("System tray unavailable: {e}"))
             }
         }
     }
