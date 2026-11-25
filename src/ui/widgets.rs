@@ -82,13 +82,15 @@ pub fn switch_row(ui: &mut Ui, title: &str, subtitle: Option<&str>, on: &mut boo
 pub fn segmented(ui: &mut Ui, options: &[&str], selected: &mut usize, enabled: bool) -> bool {
     let w = ui.available_width();
     let h = 38.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    let (rect, base) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let p = ui.painter().clone();
     p.rect_filled(rect, CornerRadius::same(19), CARD_HI);
     let n = options.len().max(1) as f32;
     let seg_w = (w - 6.0) / n;
     let anim = ui.ctx().animate_value_with_time(
-        ui.scope_id().with("seg").with(rect.min.x as i32),
+        // The widget's own id: unique per control and stable while scrolling.
+        // (Keying on the x position made controls in one column share it.)
+        base.id.with("seg"),
         *selected as f32,
         0.15,
     );
@@ -104,11 +106,7 @@ pub fn segmented(ui: &mut Ui, options: &[&str], selected: &mut usize, enabled: b
             pos2(rect.left() + 3.0 + i as f32 * seg_w, rect.top()),
             vec2(seg_w, h),
         );
-        let resp = ui.interact(
-            r,
-            ui.scope_id().with(("segment", i, rect.min.y as i32)),
-            Sense::click(),
-        );
+        let resp = ui.interact(r, base.id.with(("segment", i)), Sense::click());
         if resp.clicked() && enabled && *selected != i {
             *selected = i;
             changed = true;
