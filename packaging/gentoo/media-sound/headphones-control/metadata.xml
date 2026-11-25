@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<name>Al-Hadrusi</name>
+	</maintainer>
+	<use>
+		<flag name="bluetooth">Control real headsets over Bluetooth via BlueZ (otherwise only the built-in simulated devices work)</flag>
+	</use>
+	<upstream>
+		<remote-id type="github">Al-Hadrusi/SonyGUIAudioDrivers</remote-id>
+	</upstream>
+</pkgmetadata>

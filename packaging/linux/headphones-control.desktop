@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Headphones Control
+GenericName=Headphones Settings
+Comment=Noise cancelling, ambient sound and equalizer for Sony headphones (unofficial)
+Exec=headphones-control
+Icon=headphones-control
+Terminal=false
+Categories=AudioVideo;Audio;Settings;HardwareSettings;
+Keywords=sony;headphones;noise;cancelling;anc;ambient;equalizer;bluetooth;
+StartupWMClass=headphones-control

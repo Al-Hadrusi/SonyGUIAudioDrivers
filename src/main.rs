@@ -45,6 +45,12 @@ fn parse_args() -> Result<LaunchOptions, String> {
     Ok(opts)
 }
 
+/// The app icon, embedded in the binary.
+fn window_icon() -> eframe::egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/headphones-control-256.png"))
+        .unwrap_or_default()
+}
+
 fn main() -> eframe::Result {
     let opts = match parse_args() {
         Ok(o) => o,
@@ -58,7 +64,8 @@ fn main() -> eframe::Result {
             .with_title("Headphones Control")
             .with_app_id("headphones-control")
             .with_inner_size([ui::theme::PHONE_WIDTH, ui::theme::PHONE_HEIGHT])
-            .with_min_inner_size([340.0, 560.0]),
+            .with_min_inner_size([340.0, 560.0])
+            .with_icon(window_icon()),
         ..Default::default()
     };
     eframe::run_native(
