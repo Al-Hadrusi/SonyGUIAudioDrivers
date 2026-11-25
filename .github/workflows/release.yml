@@ -1,12 +1,20 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the downloads and publish a GitHub release.
+# Either push a tag like v0.1.0, or run this workflow by hand ("Run workflow")
+# with a version: it then creates the tag itself on the commit it runs on.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (e.g. 0.1.0)"
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
+  # "0.1.0" from either the manual input or the pushed tag "v0.1.0".
+  VERSION: ${{ inputs.version || github.ref_name }}
 
 jobs:
   linux:
@@ -27,7 +35,7 @@ jobs:
 
       - name: Package
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION#v}"
           DIR="headphones-control-${VERSION}-x86_64-linux"
           mkdir -p "$DIR/packaging/linux" "$DIR/assets"
           cp target/release/headphones-control "$DIR/"
@@ -55,7 +63,7 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $version = "$env:GITHUB_REF_NAME".TrimStart("v")
+          $version = "$env:VERSION".TrimStart("v")
           $dir = "headphones-control-$version-x86_64-windows"
           New-Item -ItemType Directory -Path $dir | Out-Null
           Copy-Item target/release/headphones-control.exe, LICENSE, README.md $dir
@@ -80,8 +88,15 @@ jobs:
       - name: Checksums
         run: sha256sum headphones-control-* > SHA256SUMS
 
+      - name: Tag name
+        run: echo "TAG=v${VERSION#v}" >> "$GITHUB_ENV"
+
       - uses: softprops/action-gh-release@v2
         with:
+          # Creates the tag on this commit when it doesn't exist yet.
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Headphones Control ${{ env.TAG }}
           generate_release_notes: true
           files: |
             headphones-control-*
