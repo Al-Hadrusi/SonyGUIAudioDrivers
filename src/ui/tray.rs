@@ -234,8 +234,10 @@ fn tray_icon() -> Vec<Icon> {
     };
     let data = img
         .rgba
-        .chunks_exact(4)
-        .flat_map(|p| [p[3], p[0], p[1], p[2]])
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| [a, r, g, b])
         .collect();
     let (Ok(width), Ok(height)) = (i32::try_from(img.width), i32::try_from(img.height)) else {
         return Vec::new();
