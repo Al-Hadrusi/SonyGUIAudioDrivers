@@ -7,8 +7,8 @@ use eframe::egui::{
 };
 
 use super::theme::*;
-use sony_audio_control::protocol::{Battery, EQ_BAND_LABELS, EQ_MAX, EQ_MIN};
-use sony_audio_control::transport::FormFactor;
+use headphones_control::protocol::{Battery, EQ_BAND_LABELS, EQ_MAX, EQ_MIN};
+use headphones_control::transport::FormFactor;
 
 /// A rounded card with an optional title.
 pub fn card<R>(ui: &mut Ui, title: Option<&str>, add: impl FnOnce(&mut Ui) -> R) -> R {

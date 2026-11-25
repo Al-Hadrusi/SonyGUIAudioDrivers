@@ -8,7 +8,7 @@ mod ui;
 use ui::app::{LaunchOptions, Tab};
 
 const USAGE: &str = "\
-Usage: sony-audio-control [--demo [MODEL]] [--tab status|sound|system]
+Usage: headphones-control [--demo [MODEL]] [--tab status|sound|system]
 
   --demo           Also list the built-in simulated devices (for development)
   --demo <MODEL>   Connect straight to a simulated device
@@ -55,14 +55,14 @@ fn main() -> eframe::Result {
     };
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Headphones")
-            .with_app_id("sony-audio-control")
+            .with_title("Headphones Control")
+            .with_app_id("headphones-control")
             .with_inner_size([ui::theme::PHONE_WIDTH, ui::theme::PHONE_HEIGHT])
             .with_min_inner_size([340.0, 560.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "Headphones",
+        "Headphones Control",
         options,
         Box::new(|cc| Ok(Box::new(ui::app::App::new(cc, opts)))),
     )

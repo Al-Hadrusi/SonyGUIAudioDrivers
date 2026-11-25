@@ -8,9 +8,9 @@ use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, 
 
 use super::theme::{self, *};
 use super::widgets::*;
-use sony_audio_control::protocol::*;
-use sony_audio_control::transport::{self, DeviceInfo, FormFactor};
-use sony_audio_control::worker::{Connection, Event};
+use headphones_control::protocol::*;
+use headphones_control::transport::{self, DeviceInfo, FormFactor};
+use headphones_control::worker::{Connection, Event};
 
 enum Screen {
     Devices,

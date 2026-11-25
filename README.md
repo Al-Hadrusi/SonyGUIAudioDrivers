@@ -1,4 +1,4 @@
-# Sony Audio Control
+# Headphones Control for Linux (unofficial)
 
 A desktop companion app for Sony Bluetooth headphones and earbuds, written in **100% safe Rust**
 (`unsafe_code = "forbid"` is set for the whole crate, so the compiler rejects any `unsafe` block).
@@ -101,7 +101,7 @@ On X11, `x11-libs/libxkbcommon` needs the `X` USE flag, because the window libra
 `libxkbcommon-x11.so` at runtime:
 
 ```bash
-echo "x11-libs/libxkbcommon X" | sudo tee /etc/portage/package.use/sony-audio-control
+echo "x11-libs/libxkbcommon X" | sudo tee /etc/portage/package.use/headphones-control
 ```
 
 Your kernel needs Bluetooth with RFCOMM: `CONFIG_BT`, `CONFIG_BT_RFCOMM`, `CONFIG_BT_BREDR` and
