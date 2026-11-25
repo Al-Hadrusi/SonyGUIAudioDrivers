@@ -1,0 +1,31 @@
+[package]
+name = "sony-audio-control"
+version = "0.1.0"
+edition = "2024"
+description = "A desktop companion app for Sony Bluetooth headphones and earbuds (noise cancelling, ambient sound, EQ, ...), written in 100% safe Rust."
+license = "MIT"
+default-run = "sony-audio-control"
+
+[features]
+default = ["bluetooth"]
+# Real Bluetooth support through BlueZ (Linux). Without it the app runs with the
+# built-in simulated device only.
+bluetooth = ["dep:bluer", "dep:tokio", "dep:futures"]
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17", features = ["bluetoothd", "rfcomm"], optional = true }
+tokio = { version = "1", features = ["rt", "time", "macros", "io-util"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+[profile.release]
+lto = "thin"
+strip = true
