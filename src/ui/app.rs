@@ -71,6 +71,11 @@ struct DeviceView {
     auto_power_off: AutoPowerOff,
     confirm_power_off: bool,
     dialect: Dialect,
+
+    /// `None` until the headset reports it (models without it never do).
+    listening: Option<ListeningMode>,
+    room: RoomSize,
+    surround: Option<Surround>,
 }
 
 impl App {
@@ -457,6 +462,9 @@ impl DeviceView {
             pause_when_off: true,
             auto_power_off: AutoPowerOff::Off,
             confirm_power_off: false,
+            listening: None,
+            room: RoomSize::Small,
+            surround: None,
         }
     }
 
@@ -480,6 +488,28 @@ impl DeviceView {
                 }
                 BatteryKind::Case => self.battery_case = Some(left),
             },
+            Notification::BgmMode { on, room } => {
+                self.room = room;
+                let current = self.listening.unwrap_or_default();
+                self.listening = Some(if on {
+                    ListeningMode::Bgm
+                } else if current == ListeningMode::Bgm {
+                    ListeningMode::Standard
+                } else {
+                    current
+                });
+            }
+            Notification::CinemaMode(on) => {
+                let current = self.listening.unwrap_or_default();
+                self.listening = Some(if on {
+                    ListeningMode::Cinema
+                } else if current == ListeningMode::Cinema {
+                    ListeningMode::Standard
+                } else {
+                    current
+                });
+            }
+            Notification::Surround(mode) => self.surround = Some(mode),
             Notification::SpeakToChat(on) => self.speak_to_chat = on,
             Notification::SpeakToChatConfig(cfg) => {
                 let focus = self.stc.focus_on_voice;
@@ -782,25 +812,42 @@ impl DeviceView {
         });
 
         ui.add_space(12.0);
+        let mut rows: Vec<(&str, String)> = Vec::new();
+        if let Some(mode) = self.listening {
+            let label = match mode {
+                ListeningMode::Standard => "Standard".to_string(),
+                ListeningMode::Bgm => format!("BGM · {}", self.room.label()),
+                ListeningMode::Cinema => "Cinema".to_string(),
+            };
+            rows.push(("Listening Mode", label));
+        }
+        if let Some(sur) = self.surround {
+            rows.push(("Surround (VPT)", sur.label().to_string()));
+        }
+        rows.push(("Equalizer", self.eq.preset.label().to_string()));
         card(ui, None, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Equalizer").size(15.5).color(TEXT));
-                    ui.label(
-                        RichText::new(self.eq.preset.label())
-                            .size(12.5)
-                            .color(ACCENT),
-                    );
+            for (i, (title, value)) in rows.iter().enumerate() {
+                if i > 0 {
+                    divider(ui);
+                }
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(*title).size(15.5).color(TEXT));
+                        ui.label(RichText::new(value).size(12.5).color(ACCENT));
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new("Edit ›").color(SUBTEXT))
+                                    .frame(false),
+                            )
+                            .clicked()
+                        {
+                            self.tab = Tab::Sound;
+                        }
+                    });
                 });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(egui::Button::new(RichText::new("Edit ›").color(SUBTEXT)).frame(false))
-                        .clicked()
-                    {
-                        self.tab = Tab::Sound;
-                    }
-                });
-            });
+            }
         });
 
         ui.add_space(12.0);
@@ -812,11 +859,101 @@ impl DeviceView {
 
     // ---------------- Sound ----------------
 
+    /// Switch listening mode the way the phone app does: turning BGM or
+    /// Cinema off returns to Standard.
+    fn set_listening(&mut self, mode: ListeningMode) {
+        let current = self.listening.unwrap_or_default();
+        if mode == current {
+            return;
+        }
+        let request = match mode {
+            ListeningMode::Bgm => Request::SetBgmMode {
+                on: true,
+                room: self.room,
+            },
+            ListeningMode::Cinema => Request::SetCinemaMode(true),
+            ListeningMode::Standard if current == ListeningMode::Bgm => Request::SetBgmMode {
+                on: false,
+                room: self.room,
+            },
+            ListeningMode::Standard => Request::SetCinemaMode(false),
+        };
+        self.listening = Some(mode);
+        self.conn.send(request);
+    }
+
+    fn listening_card(&mut self, ui: &mut Ui) {
+        let Some(current) = self.listening else {
+            return;
+        };
+        card(ui, Some("Listening Mode"), |ui| {
+            let w = (ui.available_width() / 3.0).floor();
+            let mut picked = None;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                for (mode, icon, label) in [
+                    (ListeningMode::Standard, ModeIcon::Standard, "Standard"),
+                    (ListeningMode::Bgm, ModeIcon::Bgm, "BGM"),
+                    (ListeningMode::Cinema, ModeIcon::Cinema, "Cinema"),
+                ] {
+                    if mode_button(ui, icon, label, current == mode, w).clicked() {
+                        picked = Some(mode);
+                    }
+                }
+            });
+            if let Some(mode) = picked {
+                self.set_listening(mode);
+            }
+            let description = match self.listening.unwrap_or_default() {
+                ListeningMode::Standard => "Plays music as the artist intended.",
+                ListeningMode::Bgm => {
+                    "Sounds as if the music is playing from speakers in a room, so it stays in the background."
+                }
+                ListeningMode::Cinema => "Spatial, theater-like sound for movies and videos.",
+            };
+            ui.label(RichText::new(description).size(12.5).color(SUBTEXT));
+            if self.listening == Some(ListeningMode::Bgm) {
+                ui.add_space(6.0);
+                divider(ui);
+                ui.add_space(6.0);
+                ui.label(RichText::new("Room size").size(14.0).color(SUBTEXT));
+                let labels: Vec<&str> = RoomSize::ALL.iter().map(|r| r.label()).collect();
+                let mut idx = RoomSize::ALL
+                    .iter()
+                    .position(|r| *r == self.room)
+                    .unwrap_or(0);
+                if segmented(ui, &labels, &mut idx, true) {
+                    self.room = RoomSize::ALL[idx];
+                    self.conn.send(Request::SetBgmMode {
+                        on: true,
+                        room: self.room,
+                    });
+                }
+            }
+        });
+        ui.add_space(12.0);
+    }
+
+    fn surround_card(&mut self, ui: &mut Ui) {
+        let Some(current) = self.surround else { return };
+        card(ui, Some("Surround (VPT)"), |ui| {
+            let labels: Vec<&str> = Surround::ALL.iter().map(|s| s.label()).collect();
+            let selected = Surround::ALL.iter().position(|s| *s == current);
+            if let Some(i) = chips(ui, "surround", &labels, selected) {
+                self.surround = Some(Surround::ALL[i]);
+                self.conn.send(Request::SetSurround(Surround::ALL[i]));
+            }
+        });
+        ui.add_space(12.0);
+    }
+
     fn sound_tab(&mut self, ui: &mut Ui) {
+        self.listening_card(ui);
+        self.surround_card(ui);
         card(ui, Some("Equalizer"), |ui| {
             let labels: Vec<&str> = EqPreset::ALL.iter().map(|p| p.label()).collect();
             let selected = EqPreset::ALL.iter().position(|p| *p == self.eq.preset);
-            if let Some(i) = chips(ui, &labels, selected) {
+            if let Some(i) = chips(ui, "eq_presets", &labels, selected) {
                 let preset = EqPreset::ALL[i];
                 self.eq.preset = preset;
                 if !preset.is_editable() {

@@ -1,9 +1,10 @@
 //! An in-process headset emulator that speaks the real wire protocol. It lets
 //! the app be used and tested without hardware.
 //!
+//! * `WH-1000XM6` – protocol V2, with Listening Mode (Standard / BGM / Cinema)
 //! * `WH-1000XM5` – protocol V2, ambient type `0x15`
 //! * `WF-1000XM5` – protocol V2, ambient type `0x17` (wind noise reduction)
-//! * `WH-1000XM4` – protocol V1
+//! * `WH-1000XM4` – protocol V1, with virtual surround
 
 use std::collections::VecDeque;
 use std::io;
@@ -13,7 +14,7 @@ use super::{DeviceInfo, FormFactor, Transport};
 use crate::protocol::message::*;
 use crate::protocol::{DataType, Frame, FrameDecoder};
 
-pub const DEMO_MODELS: [&str; 3] = ["WH-1000XM5", "WF-1000XM5", "WH-1000XM4"];
+pub const DEMO_MODELS: [&str; 4] = ["WH-1000XM6", "WH-1000XM5", "WF-1000XM5", "WH-1000XM4"];
 
 pub fn demo_devices() -> Vec<DeviceInfo> {
     DEMO_MODELS
@@ -44,6 +45,10 @@ pub struct SimulatedHeadset {
     battery: [u8; 3],
     last_drain: Instant,
     powered_off: bool,
+    /// `None` when the model has no listening mode.
+    listening: Option<(ListeningMode, RoomSize)>,
+    /// `None` when the model has no virtual surround.
+    surround: Option<Surround>,
     /// Every request received, for tests.
     pub received: Vec<Request>,
 }
@@ -77,6 +82,10 @@ impl SimulatedHeadset {
             battery: [80, 75, 60],
             last_drain: Instant::now(),
             powered_off: false,
+            listening: upper
+                .contains("XM6")
+                .then_some((ListeningMode::Standard, RoomSize::Small)),
+            surround: (dialect == Dialect::V1).then_some(Surround::Off),
             received: Vec::new(),
         }
     }
@@ -205,7 +214,66 @@ impl SimulatedHeadset {
                 self.auto_power_off = apo;
                 self.emit(Notification::AutoPowerOff(apo));
             }
+            Request::GetBgmMode | Request::GetCinemaMode => {
+                if let Some((mode, room)) = self.listening {
+                    if request == Request::GetBgmMode {
+                        self.emit(Notification::BgmMode {
+                            on: mode == ListeningMode::Bgm,
+                            room,
+                        });
+                    } else {
+                        self.emit(Notification::CinemaMode(mode == ListeningMode::Cinema));
+                    }
+                }
+            }
+            Request::SetBgmMode { on, room } => {
+                if let Some((mode, _)) = self.listening {
+                    let mode = if on {
+                        ListeningMode::Bgm
+                    } else if mode == ListeningMode::Bgm {
+                        ListeningMode::Standard
+                    } else {
+                        mode
+                    };
+                    self.listening = Some((mode, room));
+                    self.emit_listening();
+                }
+            }
+            Request::SetCinemaMode(on) => {
+                if let Some((mode, room)) = self.listening {
+                    let mode = if on {
+                        ListeningMode::Cinema
+                    } else if mode == ListeningMode::Cinema {
+                        ListeningMode::Standard
+                    } else {
+                        mode
+                    };
+                    self.listening = Some((mode, room));
+                    self.emit_listening();
+                }
+            }
+            Request::GetSurround => {
+                if let Some(mode) = self.surround {
+                    self.emit(Notification::Surround(mode));
+                }
+            }
+            Request::SetSurround(mode) => {
+                if self.surround.is_some() {
+                    self.surround = Some(mode);
+                    self.emit(Notification::Surround(mode));
+                }
+            }
             Request::PowerOff => self.powered_off = true,
+        }
+    }
+
+    fn emit_listening(&mut self) {
+        if let Some((mode, room)) = self.listening {
+            self.emit(Notification::BgmMode {
+                on: mode == ListeningMode::Bgm,
+                room,
+            });
+            self.emit(Notification::CinemaMode(mode == ListeningMode::Cinema));
         }
     }
 
@@ -327,6 +395,39 @@ mod tests {
             Err(crate::protocol::SessionError::Unsupported(_))
         ));
         assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    }
+
+    #[test]
+    fn xm6_listening_mode() {
+        let mut s = Session::new(Box::new(SimulatedHeadset::new("WH-1000XM6")));
+        s.send(&Request::Init).unwrap();
+        drain(&mut s);
+        s.send(&Request::SetCinemaMode(true)).unwrap();
+        assert!(drain(&mut s).contains(&Notification::CinemaMode(true)));
+        s.send(&Request::SetBgmMode {
+            on: true,
+            room: RoomSize::Large,
+        })
+        .unwrap();
+        let got = drain(&mut s);
+        assert!(got.contains(&Notification::BgmMode {
+            on: true,
+            room: RoomSize::Large
+        }));
+        assert!(got.contains(&Notification::CinemaMode(false)));
+    }
+
+    #[test]
+    fn xm5_has_no_listening_mode() {
+        let mut s = Session::new(Box::new(SimulatedHeadset::new("WH-1000XM5")));
+        s.send(&Request::Init).unwrap();
+        drain(&mut s);
+        s.send(&Request::GetCinemaMode).unwrap();
+        assert!(
+            !drain(&mut s)
+                .iter()
+                .any(|n| matches!(n, Notification::CinemaMode(_)))
+        );
     }
 
     #[test]

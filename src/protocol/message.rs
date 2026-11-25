@@ -135,6 +135,11 @@ pub mod op {
     pub const V2_AUTO_POWER_OFF_SET: u8 = 0x28;
     pub const V2_AUTO_POWER_OFF_NOTIFY: u8 = 0x29;
 
+    /// V1 only: virtual surround (VPT) / sound position.
+    pub const V1_SURROUND_GET: u8 = 0x46;
+    pub const V1_SURROUND_RET: u8 = 0x47;
+    pub const V1_SURROUND_SET: u8 = 0x48;
+    pub const V1_SURROUND_NOTIFY: u8 = 0x49;
     pub const EQ_GET: u8 = 0x56;
     pub const EQ_RET: u8 = 0x57;
     pub const EQ_SET: u8 = 0x58;
@@ -147,6 +152,8 @@ pub mod op {
     pub const TOUCH_SENSOR_RET: u8 = 0xD7;
     pub const TOUCH_SENSOR_SET: u8 = 0xD8;
     pub const TOUCH_SENSOR_NOTIFY: u8 = 0xD9;
+    /// "Audio" family. Sub-types (V2): 0x01 upscaling (DSEE),
+    /// 0x03 BGM listening mode, 0x04 Cinema listening mode.
     pub const AUDIO_UPSAMPLING_GET: u8 = 0xE6;
     pub const AUDIO_UPSAMPLING_RET: u8 = 0xE7;
     pub const AUDIO_UPSAMPLING_SET: u8 = 0xE8;
@@ -554,6 +561,94 @@ pub struct SpeakToChatConfig {
     pub timeout: StcTimeout,
 }
 
+/// Room size of the BGM listening mode (labels as in the phone app).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RoomSize {
+    #[default]
+    Small,
+    Middle,
+    Large,
+}
+
+impl RoomSize {
+    pub const ALL: [RoomSize; 3] = [RoomSize::Small, RoomSize::Middle, RoomSize::Large];
+    fn code(self) -> u8 {
+        match self {
+            RoomSize::Small => 0x00,
+            RoomSize::Middle => 0x01,
+            RoomSize::Large => 0x02,
+        }
+    }
+    fn from_code(c: u8) -> Option<Self> {
+        RoomSize::ALL.into_iter().find(|x| x.code() == c)
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            RoomSize::Small => "My Room",
+            RoomSize::Middle => "Living Room",
+            RoomSize::Large => "Café",
+        }
+    }
+}
+
+/// Listening mode of newer headsets (WH-1000XM6, ...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ListeningMode {
+    #[default]
+    Standard,
+    /// Background music: sound as if played from speakers in a room.
+    Bgm,
+    /// Up-mixed, cinema-like spatial sound.
+    Cinema,
+}
+
+/// Virtual surround presets of older (V1) headsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Surround {
+    #[default]
+    Off,
+    OutdoorStage,
+    Arena,
+    ConcertHall,
+    Club,
+}
+
+impl Surround {
+    pub const ALL: [Surround; 5] = [
+        Surround::Off,
+        Surround::Arena,
+        Surround::Club,
+        Surround::OutdoorStage,
+        Surround::ConcertHall,
+    ];
+    fn code(self) -> u8 {
+        match self {
+            Surround::Off => 0x00,
+            Surround::OutdoorStage => 0x01,
+            Surround::Arena => 0x02,
+            Surround::ConcertHall => 0x03,
+            Surround::Club => 0x04,
+        }
+    }
+    fn from_code(c: u8) -> Option<Self> {
+        Surround::ALL.into_iter().find(|x| x.code() == c)
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Surround::Off => "Off",
+            Surround::OutdoorStage => "Outdoor Stage",
+            Surround::Arena => "Arena",
+            Surround::ConcertHall => "Concert Hall",
+            Surround::Club => "Club",
+        }
+    }
+}
+
+/// V2 "enable/disable" byte: 0x00 means enabled, 0x01 disabled.
+fn v2_flag(on: bool) -> u8 {
+    u8::from(!on)
+}
+
 // ---------------------------------------------------------------------------
 // Requests
 // ---------------------------------------------------------------------------
@@ -588,6 +683,20 @@ pub enum Request {
     SetPauseWhenTakenOff(bool),
     GetAutoPowerOff,
     SetAutoPowerOff(AutoPowerOff),
+    /// V2 listening mode: query the BGM part.
+    GetBgmMode,
+    /// V2 listening mode: turn BGM on/off (off returns to Standard).
+    SetBgmMode {
+        on: bool,
+        room: RoomSize,
+    },
+    /// V2 listening mode: query the Cinema part.
+    GetCinemaMode,
+    /// V2 listening mode: turn Cinema on/off (off returns to Standard).
+    SetCinemaMode(bool),
+    /// V1 virtual surround.
+    GetSurround,
+    SetSurround(Surround),
     PowerOff,
 }
 
@@ -669,6 +778,19 @@ impl Request {
                 vec![op::TOUCH_SENSOR_SET, 0xD2, 0x01, u8::from(*on)]
             }
             Request::GetTouchSensor | Request::SetTouchSensor(_) => return None,
+            Request::GetBgmMode if v2 => vec![op::AUDIO_UPSAMPLING_GET, 0x03],
+            Request::SetBgmMode { on, room } if v2 => {
+                vec![op::AUDIO_UPSAMPLING_SET, 0x03, v2_flag(*on), room.code()]
+            }
+            Request::GetCinemaMode if v2 => vec![op::AUDIO_UPSAMPLING_GET, 0x04],
+            Request::SetCinemaMode(on) if v2 => vec![op::AUDIO_UPSAMPLING_SET, 0x04, v2_flag(*on)],
+            Request::GetBgmMode
+            | Request::SetBgmMode { .. }
+            | Request::GetCinemaMode
+            | Request::SetCinemaMode(_) => return None,
+            Request::GetSurround if !v2 => vec![op::V1_SURROUND_GET, 0x01],
+            Request::SetSurround(mode) if !v2 => vec![op::V1_SURROUND_SET, 0x01, mode.code()],
+            Request::GetSurround | Request::SetSurround(_) => return None,
             Request::GetPauseWhenTakenOff => vec![
                 op::SYSTEM_GET,
                 if v2 { sys::V2_PAUSE } else { sys::V1_PAUSE },
@@ -735,9 +857,26 @@ impl Request {
                 Request::SetEqualizerPreset(EqPreset::from_code(at(2)?))
             }
             op::EQ_SET => Request::SetEqualizerBands(parse_eq(p)?),
+            op::AUDIO_UPSAMPLING_GET if v2 => match sub? {
+                0x01 => Request::GetAudioUpsampling,
+                0x03 => Request::GetBgmMode,
+                0x04 => Request::GetCinemaMode,
+                _ => return None,
+            },
+            op::AUDIO_UPSAMPLING_SET if v2 => match sub? {
+                0x01 => Request::SetAudioUpsampling(at(2)? == 1),
+                0x03 => Request::SetBgmMode {
+                    on: at(2)? == 0,
+                    room: RoomSize::from_code(at(3)?)?,
+                },
+                0x04 => Request::SetCinemaMode(at(2)? == 0),
+                _ => return None,
+            },
             op::AUDIO_UPSAMPLING_GET => Request::GetAudioUpsampling,
-            op::AUDIO_UPSAMPLING_SET => {
-                Request::SetAudioUpsampling(at(if v2 { 2 } else { 3 })? == 1)
+            op::AUDIO_UPSAMPLING_SET => Request::SetAudioUpsampling(at(3)? == 1),
+            op::V1_SURROUND_GET if !v2 && sub == Some(0x01) => Request::GetSurround,
+            op::V1_SURROUND_SET if !v2 && sub == Some(0x01) => {
+                Request::SetSurround(Surround::from_code(at(2)?)?)
             }
             op::SYSTEM_GET if v2 => match sub? {
                 sys::V2_STC => Request::GetSpeakToChat,
@@ -930,6 +1069,12 @@ pub enum Notification {
     AmbientSound(AmbientSound),
     Equalizer(Equalizer),
     AudioUpsampling(bool),
+    BgmMode {
+        on: bool,
+        room: RoomSize,
+    },
+    CinemaMode(bool),
+    Surround(Surround),
     SpeakToChat(bool),
     SpeakToChatConfig(SpeakToChatConfig),
     TouchSensor(bool),
@@ -1038,10 +1183,34 @@ impl Notification {
                         got: p.len(),
                     })
             }
+            op::AUDIO_UPSAMPLING_RET | op::AUDIO_UPSAMPLING_NOTIFY if v2 => {
+                need(p, 3)?;
+                match p[1] {
+                    0x01 => Ok(Notification::AudioUpsampling(p[2] == 0x01)),
+                    0x03 => {
+                        need(p, 4)?;
+                        let room = RoomSize::from_code(p[3]).ok_or(invalid("unknown room size"))?;
+                        Ok(Notification::BgmMode {
+                            on: p[2] == 0x00,
+                            room,
+                        })
+                    }
+                    0x04 => Ok(Notification::CinemaMode(p[2] == 0x00)),
+                    _ => Ok(Notification::Unknown(p.to_vec())),
+                }
+            }
             op::AUDIO_UPSAMPLING_RET | op::AUDIO_UPSAMPLING_NOTIFY => {
-                let i = if v2 { 2 } else { 3 };
-                need(p, i + 1)?;
-                Ok(Notification::AudioUpsampling(p[i] == 0x01))
+                need(p, 4)?;
+                Ok(Notification::AudioUpsampling(p[3] == 0x01))
+            }
+            op::V1_SURROUND_RET | op::V1_SURROUND_NOTIFY if !v2 => {
+                need(p, 3)?;
+                if p[1] != 0x01 {
+                    return Ok(Notification::Unknown(p.to_vec()));
+                }
+                Surround::from_code(p[2])
+                    .map(Notification::Surround)
+                    .ok_or(invalid("unknown surround mode"))
             }
             op::SYSTEM_RET | op::SYSTEM_NOTIFY => {
                 need(p, 3)?;
@@ -1127,6 +1296,11 @@ impl Notification {
                 p
             }
             Notification::Equalizer(eq) => eq_payload(op::EQ_NOTIFY, eq),
+            Notification::BgmMode { on, room } => {
+                vec![op::AUDIO_UPSAMPLING_NOTIFY, 0x03, v2_flag(*on), room.code()]
+            }
+            Notification::CinemaMode(on) => vec![op::AUDIO_UPSAMPLING_NOTIFY, 0x04, v2_flag(*on)],
+            Notification::Surround(mode) => vec![op::V1_SURROUND_NOTIFY, 0x01, mode.code()],
             Notification::AudioUpsampling(on) => {
                 if v2 {
                     vec![op::AUDIO_UPSAMPLING_NOTIFY, 0x01, u8::from(*on)]
@@ -1328,6 +1502,61 @@ mod tests {
             vec![0x58, 0x00, 0x16, 0x00]
         );
         assert_eq!(Request::SetTouchSensor(true).payload(XM5), None);
+    }
+
+    #[test]
+    fn listening_mode_bytes_match_reference() {
+        // AudioParamBGMMode / AudioParamUpmixCinema; 0x00 = enable, 0x01 = disable.
+        let bgm = Request::SetBgmMode {
+            on: true,
+            room: RoomSize::Middle,
+        };
+        assert_eq!(bgm.payload(XM5).unwrap(), vec![0xE8, 0x03, 0x00, 0x01]);
+        let std = Request::SetBgmMode {
+            on: false,
+            room: RoomSize::Small,
+        };
+        assert_eq!(std.payload(XM5).unwrap(), vec![0xE8, 0x03, 0x01, 0x00]);
+        assert_eq!(
+            Request::SetCinemaMode(true).payload(XM5).unwrap(),
+            vec![0xE8, 0x04, 0x00]
+        );
+        assert_eq!(
+            Request::GetCinemaMode.payload(XM5).unwrap(),
+            vec![0xE6, 0x04]
+        );
+        assert_eq!(Request::SetCinemaMode(true).payload(Dialect::V1), None);
+        assert_eq!(
+            Notification::parse(&[0xE9, 0x03, 0x00, 0x02], XM5).unwrap(),
+            Notification::BgmMode {
+                on: true,
+                room: RoomSize::Large
+            }
+        );
+        assert_eq!(
+            Notification::parse(&[0xE7, 0x04, 0x01], XM5).unwrap(),
+            Notification::CinemaMode(false)
+        );
+        // DSEE still parses next to them.
+        assert_eq!(
+            Notification::parse(&[0xE7, 0x01, 0x01], XM5).unwrap(),
+            Notification::AudioUpsampling(true)
+        );
+    }
+
+    #[test]
+    fn v1_surround_matches_gadgetbridge() {
+        assert_eq!(
+            Request::SetSurround(Surround::Arena)
+                .payload(Dialect::V1)
+                .unwrap(),
+            vec![0x48, 0x01, 0x02]
+        );
+        assert_eq!(Request::SetSurround(Surround::Arena).payload(XM5), None);
+        assert_eq!(
+            Notification::parse(&[0x49, 0x01, 0x04], Dialect::V1).unwrap(),
+            Notification::Surround(Surround::Club)
+        );
     }
 
     #[test]

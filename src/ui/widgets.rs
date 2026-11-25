@@ -215,11 +215,55 @@ pub enum ModeIcon {
     NoiseCancelling,
     Ambient,
     Off,
+    /// Listening mode "Standard": a music note.
+    Standard,
+    /// Listening mode "BGM": a speaker in a room.
+    Bgm,
+    /// Listening mode "Cinema": a screen.
+    Cinema,
 }
 
 fn draw_mode_icon(p: &egui::Painter, icon: ModeIcon, c: Pos2, color: Color32) {
     let s = Stroke::new(2.2, color);
     match icon {
+        ModeIcon::Standard => {
+            // Beamed eighth notes.
+            p.circle_filled(c + vec2(-7.0, 8.0), 4.5, color);
+            p.circle_filled(c + vec2(7.0, 5.0), 4.5, color);
+            p.line_segment([c + vec2(-3.0, 8.0), c + vec2(-3.0, -10.0)], s);
+            p.line_segment([c + vec2(11.0, 5.0), c + vec2(11.0, -13.0)], s);
+            p.line_segment(
+                [c + vec2(-3.0, -10.0), c + vec2(11.0, -13.0)],
+                Stroke::new(3.5, color),
+            );
+        }
+        ModeIcon::Bgm => {
+            // Speaker cabinet with two drivers, and a floor line.
+            let cab = Rect::from_center_size(c + vec2(0.0, -1.0), vec2(16.0, 24.0));
+            p.rect_stroke(cab, CornerRadius::same(3), s, StrokeKind::Middle);
+            p.circle_filled(cab.center() + vec2(0.0, -6.0), 2.5, color);
+            p.circle_stroke(cab.center() + vec2(0.0, 4.0), 4.5, Stroke::new(1.8, color));
+            p.line_segment(
+                [c + vec2(-15.0, 14.0), c + vec2(15.0, 14.0)],
+                Stroke::new(1.6, color),
+            );
+        }
+        ModeIcon::Cinema => {
+            // Wide screen on a stand, with a play triangle.
+            let screen = Rect::from_center_size(c + vec2(0.0, -3.0), vec2(30.0, 19.0));
+            p.rect_stroke(screen, CornerRadius::same(2), s, StrokeKind::Middle);
+            let t = screen.center();
+            p.add(Shape::convex_polygon(
+                vec![
+                    t + vec2(-3.5, -5.0),
+                    t + vec2(5.0, 0.0),
+                    t + vec2(-3.5, 5.0),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+            p.line_segment([c + vec2(-7.0, 12.0), c + vec2(7.0, 12.0)], s);
+        }
         ModeIcon::NoiseCancelling => {
             // Head-band + cups, with a "blocked wave" bar.
             small_headphones(p, c + vec2(0.0, 1.0), 0.9, color);
@@ -610,10 +654,10 @@ pub fn eq_graph(ui: &mut Ui, bands: &mut [i8; 6], editable: bool) -> SliderResul
 }
 
 /// Horizontal list of selectable chips. Returns the index clicked, if any.
-pub fn chips(ui: &mut Ui, labels: &[&str], selected: Option<usize>) -> Option<usize> {
+pub fn chips(ui: &mut Ui, id: &str, labels: &[&str], selected: Option<usize>) -> Option<usize> {
     let mut clicked = None;
     egui::ScrollArea::horizontal()
-        .id_salt("chips")
+        .id_salt(("chips", id))
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             ui.horizontal(|ui| {

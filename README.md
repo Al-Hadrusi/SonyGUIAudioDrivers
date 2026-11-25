@@ -10,6 +10,10 @@ illustration, battery levels, and **Status / Sound / System** tabs.
 |---|---|---|---|
 | ![](docs/screenshots/status.png) | ![](docs/screenshots/sound.png) | ![](docs/screenshots/system.png) | ![](docs/screenshots/earbuds.png) |
 
+| Listening Mode (WH-1000XM6) | BGM room size |
+|---|---|
+| ![](docs/screenshots/xm6-sound.png) | ![](docs/screenshots/xm6-bgm.png) |
+
 > This is an independent, unofficial project. It is not affiliated with or endorsed by Sony.
 > No Sony artwork or logos are bundled; the product illustrations are drawn with vector shapes.
 
@@ -23,6 +27,8 @@ illustration, battery levels, and **Status / Sound / System** tabs.
 | Speak-to-Chat on/off | Status |
 | Battery (headphones; earbuds L / R / case) | Header |
 | Bluetooth codec (SBC / AAC / LDAC / aptX / LC3) | Header, Status |
+| Listening Mode: Standard / BGM (My Room, Living Room, Café) / Cinema (WH-1000XM6 and other models that support it) | Sound |
+| Surround (VPT): Arena / Club / Outdoor Stage / Concert Hall (older V1 models that support it) | Sound |
 | Equalizer presets + Manual / Custom 1 / Custom 2, with Clear Bass and 5 bands (−10…+10) | Sound |
 | DSEE Extreme (upscaling) | Sound |
 | Speak-to-Chat sensitivity, voice focus, mode duration | System |
@@ -39,8 +45,8 @@ Both protocol generations are supported and detected automatically from the head
 Settings a model doesn't have (for example the touch sensor toggle on V2, or wind noise reduction on
 the WH-1000XM5) are hidden.
 
-Three **simulated devices** are built in: WH-1000XM5 (V2), WF-1000XM5 (V2 earbuds) and WH-1000XM4
-(V1). They speak the real wire protocol, so you can try every control without hardware.
+Four **simulated devices** are built in: WH-1000XM6 (V2 with Listening Mode), WH-1000XM5 (V2),
+WF-1000XM5 (V2 earbuds) and WH-1000XM4 (V1 with Surround). They speak the real wire protocol, so you can try every control without hardware.
 
 ## Building and running
 
@@ -160,7 +166,7 @@ The safety measures:
 * Slider drags are merged in the worker so the headset isn't flooded with commands.
 
 The protocol opcodes come from public reverse-engineering work by the open-source community
-(Gadgetbridge, SonyHeadphonesClient). Opcodes differ between models and firmware versions. Some
+(Gadgetbridge, and mos9527's SonyHeadphonesClient fork for the Listening Mode messages). Opcodes differ between models and firmware versions. Some
 settings, mainly in the System tab, are send-only and may not apply on every model.
 
 ## Tests
