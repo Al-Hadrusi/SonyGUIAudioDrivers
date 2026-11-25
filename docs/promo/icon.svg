@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A2A2F"/>
+      <stop offset="1" stop-color="#0B0B0D"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFC04D"/>
+      <stop offset="1" stop-color="#F5A31B"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <!-- headband -->
+  <path d="M60 150 V128 a68 68 0 0 1 136 0 V150" fill="none" stroke="url(#amber)" stroke-width="16" stroke-linecap="round"/>
+  <!-- ear cups -->
+  <rect x="44" y="132" width="44" height="72" rx="20" fill="url(#amber)"/>
+  <rect x="168" y="132" width="44" height="72" rx="20" fill="url(#amber)"/>
+  <rect x="58" y="146" width="16" height="44" rx="8" fill="#0B0B0D" opacity="0.35"/>
+  <rect x="182" y="146" width="16" height="44" rx="8" fill="#0B0B0D" opacity="0.35"/>
+  <!-- sound wave -->
+  <path d="M112 168 v-16 M128 178 v-36 M144 168 v-16" stroke="#F4F4F6" stroke-width="9" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0b0b0d; --card: #1c1c1f; --hi: #2a2a2e; --text: #f4f4f6; --sub: #9c9ca3;
+    --muted: #5e5e66; --accent: #f5a31b; --good: #4cd964; --bad: #ff453a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); }
+  body { font-family: "Inter", "DejaVu Sans", sans-serif; color: var(--text); -webkit-font-smoothing: antialiased; }
+  #stage { position: absolute; inset: 0; overflow: hidden; }
+  .layer { position: absolute; inset: 0; opacity: 0; }
+  .glow { position: absolute; border-radius: 50%; filter: blur(80px); }
+  .h1 { font-weight: 800; letter-spacing: -2px; }
+  .kicker { color: var(--accent); font-weight: 700; letter-spacing: 6px; text-transform: uppercase; font-size: 22px; }
+  .lead { color: var(--sub); font-size: 34px; line-height: 1.4; font-weight: 400; }
+
+  /* Phone */
+  .phone { position: absolute; width: 452px; height: 920px; border-radius: 56px; background: #050506;
+           box-shadow: 0 0 0 2px #2c2c31, 0 40px 120px rgba(0,0,0,.7), 0 0 120px rgba(245,163,27,.10); }
+  .screen { position: absolute; left: 20px; top: 20px; width: 412px; height: 880px; border-radius: 38px; overflow: hidden; background: var(--bg); }
+  .screen img { position: absolute; left: 0; top: 0; width: 412px; }
+  .ring { position: absolute; border-radius: 50%; border: 3px solid var(--accent); }
+
+  /* Text blocks */
+  .copy { position: absolute; left: 160px; width: 860px; }
+  .copy .h1 { font-size: 84px; line-height: 1.04; margin: 18px 0 28px; }
+  .chips { display: flex; gap: 16px; margin-top: 40px; flex-wrap: wrap; }
+  .chip { padding: 14px 26px; border-radius: 999px; background: var(--hi); font-size: 26px; font-weight: 600; color: var(--text); }
+  .chip.on { background: var(--accent); color: #111; }
+
+  /* Tray scene */
+  .desk { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: rgba(28,28,31,.96); border-top: 1px solid #2e2e33; }
+  .trayicons { position: absolute; right: 40px; bottom: 12px; display: flex; gap: 18px; align-items: center; }
+  .ti { width: 40px; height: 40px; border-radius: 10px; background: #2a2a2e; }
+  .menu { position: absolute; width: 470px; background: #232327; border: 1px solid #36363c; border-radius: 18px; padding: 10px 0;
+          box-shadow: 0 30px 80px rgba(0,0,0,.6); font-size: 25px; }
+  .menu .item { padding: 14px 28px; display: flex; align-items: center; gap: 18px; color: var(--text); }
+  .menu .item.dim { color: var(--sub); font-size: 22px; }
+  .menu .sep { height: 1px; background: #36363c; margin: 8px 0; }
+  .radio { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--sub); }
+  .radio.on { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
+  .hl { background: rgba(245,163,27,.16); }
+  .toast { position: absolute; width: 560px; background: #232327; border: 1px solid #36363c; border-radius: 20px; padding: 26px 30px;
+           display: flex; gap: 22px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+  .toast b { font-size: 26px; display: block; margin-bottom: 8px; }
+  .toast span { font-size: 22px; color: var(--sub); line-height: 1.35; }
+
+  /* Engineering scene */
+  .code { position: absolute; left: 160px; top: 380px; width: 820px; background: #141416; border: 1px solid #2e2e33; border-radius: 24px;
+          padding: 40px 46px; font-family: "DejaVu Sans Mono", monospace; font-size: 40px; color: #e8e8ea; }
+  .code .k { color: var(--accent); }
+  .grid { position: absolute; left: 1080px; top: 250px; width: 700px; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .tile { background: var(--card); border-radius: 24px; padding: 30px 30px; border: 1px solid #26262a; }
+  .tile b { display: block; font-size: 30px; margin-bottom: 10px; }
+  .tile span { color: var(--sub); font-size: 22px; line-height: 1.35; }
+  .tile i { display: block; width: 44px; height: 6px; border-radius: 3px; background: var(--accent); margin-bottom: 20px; }
+
+  .fine { position: absolute; left: 0; right: 0; text-align: center; color: var(--muted); font-size: 20px; }
+  .url { font-family: "DejaVu Sans Mono", monospace; font-size: 34px; color: var(--text); background: var(--card);
+         border: 1px solid #2e2e33; border-radius: 16px; padding: 18px 34px; display: inline-block; }
+  .bar { position: absolute; left: 0; height: 6px; background: var(--accent); bottom: 0; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="glow" id="glowA" style="width:900px;height:900px;background:rgba(245,163,27,.22)"></div>
+  <div class="glow" id="glowB" style="width:700px;height:700px;background:rgba(76,120,255,.10)"></div>
+
+  <!-- 1. Title -->
+  <div class="layer" id="s1">
+    <img id="s1icon" src="icon.svg" style="position:absolute;left:810px;top:180px;width:300px;height:300px">
+    <div id="s1title" class="h1" style="position:absolute;left:0;right:0;top:530px;text-align:center;font-size:120px">Headphones Control</div>
+    <div id="s1tag" class="lead" style="position:absolute;left:0;right:0;top:700px;text-align:center;font-size:40px">Your Sony headphones, controlled from your desktop.</div>
+  </div>
+
+  <!-- 2. Status -->
+  <div class="layer" id="s2">
+    <div class="copy" style="top:300px">
+      <div class="kicker">Sound control</div>
+      <div class="h1">Noise canceling.<br>Ambient sound.<br>One click.</div>
+      <div class="lead">Set the ambient level, Focus on Voice and Auto Ambient Sound — the headset answers instantly.</div>
+    </div>
+    <div class="phone" id="p2"><div class="screen"><img src="shots/status.png"></div>
+      <div class="ring" id="ring2" style="width:84px;height:84px"></div></div>
+  </div>
+
+  <!-- 3. Equalizer -->
+  <div class="layer" id="s3">
+    <div class="copy" style="top:330px">
+      <div class="kicker">Equalizer</div>
+      <div class="h1">Ten bands.<br>Your sound.</div>
+      <div class="lead">Built-in presets or your own curve, read from and written to the headset itself.</div>
+    </div>
+    <div class="phone" id="p3"><div class="screen"><img id="img3" src="shots/sound-tall.png"></div></div>
+  </div>
+
+  <!-- 4. Listening Mode -->
+  <div class="layer" id="s4">
+    <div class="copy" style="top:320px">
+      <div class="kicker">Listening Mode</div>
+      <div class="h1">From studio<br>to cinema.</div>
+      <div class="chips"><div class="chip" id="c1">Standard</div><div class="chip on" id="c2">BGM</div><div class="chip" id="c3">Cinema</div></div>
+    </div>
+    <div class="phone" id="p4"><div class="screen"><img id="img4" src="shots/bgm-tall.png"></div></div>
+  </div>
+
+  <!-- 5. Tray -->
+  <div class="layer" id="s5">
+    <div class="copy" style="top:200px">
+      <div class="kicker">Always within reach</div>
+      <div class="h1">Lives quietly<br>in your tray.</div>
+      <div class="lead">Switch modes without opening a window. Get a heads-up before the battery runs out.</div>
+    </div>
+    <div class="menu" id="menu" style="right:60px;bottom:96px">
+      <div class="item dim">WH-1000XM6 · 86% · Ambient Sound</div>
+      <div class="sep"></div>
+      <div class="item" id="mNC"><div class="radio" id="rNC"></div>Noise Canceling</div>
+      <div class="item" id="mAS"><div class="radio on" id="rAS"></div>Ambient Sound</div>
+      <div class="item"><div class="radio"></div>Off</div>
+      <div class="sep"></div>
+      <div class="item">Open Headphones Control</div>
+      <div class="item">Quit</div>
+    </div>
+    <div class="toast" id="toast" style="right:560px;bottom:96px">
+      <img src="icon.svg" style="width:56px;height:56px">
+      <div><b>Headphone battery low</b><span>WH-1000XM6: 20% left. Charge your headphones soon.</span></div>
+    </div>
+    <div class="desk"><div class="trayicons">
+      <div class="ti"></div><div class="ti"></div>
+      <div id="trayIcon" style="position:relative;width:44px;height:44px">
+        <img src="icon.svg" style="width:44px;height:44px">
+        <div style="position:absolute;left:4px;right:4px;bottom:2px;height:6px;border-radius:2px;background:#303035"></div>
+        <div id="trayBar" style="position:absolute;left:4px;bottom:2px;height:6px;border-radius:2px;background:var(--good);width:31px"></div>
+      </div>
+      <div class="ti"></div>
+      <div style="font-size:24px;color:var(--sub);margin-left:10px">9:41</div>
+    </div></div>
+  </div>
+
+  <!-- 6. Engineering -->
+  <div class="layer" id="s6">
+    <div class="copy" style="top:200px">
+      <div class="kicker">Engineered to be safe</div>
+      <div class="h1" style="font-size:76px">100% safe Rust.</div>
+    </div>
+    <div class="code"><span class="k" id="codeText"></span><span id="caret" style="color:var(--accent)">▋</span>
+      <div style="font-size:24px;color:var(--sub);margin-top:24px;font-family:Inter,sans-serif">The compiler rejects any unsafe code. Every byte from the headset is bounds-checked.</div></div>
+    <div class="grid" id="grid">
+      <div class="tile"><i></i><b>Linux &amp; Windows</b><span>BlueZ and WinRT Bluetooth, native builds</span></div>
+      <div class="tile"><i></i><b>Auto-reconnect</b><span>Connects as soon as the headset turns on</span></div>
+      <div class="tile"><i></i><b>Two protocol generations</b><span>Older and newer models, detected automatically</span></div>
+      <div class="tile"><i></i><b>Open source</b><span>MIT licensed, packaged for Gentoo</span></div>
+    </div>
+  </div>
+
+  <!-- 7. End card -->
+  <div class="layer" id="s7">
+    <img id="s7icon" src="icon.svg" style="position:absolute;left:870px;top:170px;width:180px;height:180px">
+    <div class="h1" style="position:absolute;left:0;right:0;top:390px;text-align:center;font-size:96px">Headphones Control</div>
+    <div class="lead" style="position:absolute;left:0;right:0;top:530px;text-align:center">Free and open source. Download it today.</div>
+    <div style="position:absolute;left:0;right:0;top:640px;text-align:center"><span class="url">github.com/Al-Hadrusi/SonyGUIAudioDrivers</span></div>
+    <div class="fine" style="top:960px">Unofficial project — not affiliated with or endorsed by Sony. Sony is a trademark of Sony Group Corporation.</div>
+  </div>
+
+</div>
+
+<script>
+const DURATION = 34;
+const $ = id => document.getElementById(id);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const easeOut = x => 1 - Math.pow(1 - clamp(x), 3);
+const easeInOut = x => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+// 0..1 while t goes from a to b
+const p = (t, a, b) => clamp((t - a) / (b - a));
+// fade in over [a, a+fi], hold, fade out over [b-fo, b]
+const vis = (t, a, b, fi = .6, fo = .5) => Math.min(easeOut(p(t, a, a + fi)), 1 - easeInOut(p(t, b - fo, b)));
+
+function set(el, opacity, tx = 0, ty = 0, scale = 1) {
+  el.style.opacity = opacity;
+  el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+}
+
+function placePhone(el, t, a, b, x, y) {
+  const inP = easeOut(p(t, a + .1, a + 1.1));
+  const out = easeInOut(p(t, b - .5, b));
+  el.style.left = x + 'px'; el.style.top = y + 'px';
+  set(el, 1, 0, (1 - inP) * 140 - out * 40, .94 + .06 * inP);
+}
+
+function slideCopy(layer, t, a) {
+  layer.querySelectorAll('.copy > *').forEach((node, i) => {
+    const k = easeOut(p(t, a + .15 + i * .18, a + .95 + i * .18));
+    set(node, k, 0, (1 - k) * 40);
+  });
+}
+
+function render(t) {
+  // Background glows drift slowly.
+  set($('glowA'), .9, 0, 0, 1);
+  $('glowA').style.left = (1220 + 160 * Math.sin(t / 5)) + 'px';
+  $('glowA').style.top = (-200 + 120 * Math.cos(t / 6)) + 'px';
+  $('glowB').style.left = (-200 + 140 * Math.cos(t / 7)) + 'px';
+  $('glowB').style.top = (560 + 100 * Math.sin(t / 4)) + 'px';
+
+  // 1. Title 0–4
+  $('s1').style.opacity = vis(t, 0, 4, .4, .6);
+  const ic = easeOut(p(t, .1, 1.3));
+  set($('s1icon'), ic, 0, (1 - ic) * 30, .7 + .3 * ic);
+  const ti = easeOut(p(t, .8, 1.7)); set($('s1title'), ti, 0, (1 - ti) * 40);
+  const tg = easeOut(p(t, 1.4, 2.3)); set($('s1tag'), tg, 0, (1 - tg) * 30);
+
+  // 2. Status 4–9.5
+  $('s2').style.opacity = vis(t, 4, 9.5);
+  slideCopy($('s2'), t, 4);
+  placePhone($('p2'), t, 4, 9.5, 1180, 80);
+  // Highlight ring around "Ambient Sound" (button centre at 206,537 in screen coords).
+  const ringT = p(t, 6, 9);
+  const r = 84 + 26 * ((ringT * 2) % 1);
+  const ring = $('ring2');
+  ring.style.width = ring.style.height = r + 'px';
+  ring.style.left = (20 + 206 - r / 2) + 'px'; ring.style.top = (20 + 537 - r / 2) + 'px';
+  ring.style.opacity = ringT > 0 ? (1 - ((ringT * 2) % 1)) * .9 : 0;
+
+  // 3. Equalizer 9.5–15 (scroll the Sound tab to the equalizer)
+  $('s3').style.opacity = vis(t, 9.5, 15);
+  slideCopy($('s3'), t, 9.5);
+  placePhone($('p3'), t, 9.5, 15, 1180, 80);
+  $('img3').style.top = (-330 * easeInOut(p(t, 10.8, 12.6))) + 'px';
+
+  // 4. Listening Mode 15–20
+  $('s4').style.opacity = vis(t, 15, 20);
+  slideCopy($('s4'), t, 15);
+  placePhone($('p4'), t, 15, 20, 1180, 80);
+  $('img4').style.top = (-120 * easeInOut(p(t, 16.5, 18))) + 'px';
+  ['c1', 'c2', 'c3'].forEach((id, i) => {
+    const k = easeOut(p(t, 16 + i * .2, 16.7 + i * .2));
+    set($(id), k, 0, (1 - k) * 24);
+  });
+
+  // 5. Tray 20–25
+  $('s5').style.opacity = vis(t, 20, 25);
+  slideCopy($('s5'), t, 20);
+  const m = easeOut(p(t, 20.8, 21.5)); set($('menu'), m, 0, (1 - m) * 30);
+  const hl = t > 21.9 && t < 22.7;
+  $('mAS').classList.toggle('hl', hl);
+  const toast = easeOut(p(t, 23, 23.6)); set($('toast'), toast, (1 - toast) * 60, 0);
+  $('trayBar').style.width = (36 * (t < 23 ? .86 : .2)) + 'px';
+  $('trayBar').style.background = t < 23 ? 'var(--good)' : 'var(--accent)';
+
+  // 6. Engineering 25–29.5
+  $('s6').style.opacity = vis(t, 25, 29.5);
+  slideCopy($('s6'), t, 25);
+  const code = '#![forbid(unsafe_code)]';
+  const n = Math.floor(code.length * p(t, 25.6, 27));
+  $('codeText').textContent = code.slice(0, n);
+  $('caret').style.opacity = (Math.floor(t * 2.5) % 2) ? 1 : .15;
+  const g = $('grid').children;
+  for (let i = 0; i < g.length; i++) {
+    const k = easeOut(p(t, 26.2 + i * .25, 27 + i * .25));
+    set(g[i], k, 0, (1 - k) * 40);
+  }
+
+  // 7. End card 29.5–34
+  $('s7').style.opacity = vis(t, 29.5, 34.5, .7, .1);
+  const e = easeOut(p(t, 29.6, 30.8)); set($('s7icon'), e, 0, (1 - e) * 20, .8 + .2 * e);
+
+}
+render(0);
+window.render = render;
+window.DURATION = DURATION;
+</script>
+</body>
+</html>
