@@ -1,7 +1,8 @@
 //! An in-process headset emulator that speaks the real wire protocol. It lets
 //! the app be used and tested without hardware.
 //!
-//! * `WH-1000XM6` – protocol V2, with Listening Mode (Standard / BGM / Cinema)
+//! * `WH-1000XM6` – protocol V2, ambient type `0x19` (Auto Ambient Sound),
+//!   with Listening Mode (Standard / BGM / Cinema)
 //! * `WH-1000XM5` – protocol V2, ambient type `0x15`
 //! * `WF-1000XM5` – protocol V2, ambient type `0x17` (wind noise reduction)
 //! * `WH-1000XM4` – protocol V1, with virtual surround
@@ -61,6 +62,8 @@ impl SimulatedHeadset {
             Dialect::V1
         } else if upper.starts_with("WF") {
             Dialect::v2(AmbientType::WithWind)
+        } else if upper.contains("XM6") {
+            Dialect::v2(AmbientType::NoiseAdaptive)
         } else {
             Dialect::v2(AmbientType::Basic)
         };
@@ -363,6 +366,7 @@ mod tests {
             mode: AmbientMode::AmbientSound,
             level: 9,
             focus_on_voice: true,
+            ..AmbientSound::default()
         };
         s.send(&Request::SetAmbientSound {
             value: target,

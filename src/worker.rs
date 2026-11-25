@@ -177,14 +177,24 @@ fn run(
         .iter()
         .any(|n| matches!(n, Notification::AmbientSound(_)));
     if !got_ambient && dialect.is_v2() {
-        // Try the other ambient-sound sub-type (0x15 <-> 0x17).
-        session.set_dialect(Dialect::v2(dialect.ambient.other()));
-        try_send(&mut session, &Request::GetAmbientSound)?;
-        let updates = forward(&mut session, events, Duration::from_millis(500))?;
-        if !updates
-            .iter()
-            .any(|n| matches!(n, Notification::AmbientSound(_)))
-        {
+        // Try the other ambient-sound sub-types (0x15 / 0x17 / 0x19) until one
+        // answers. A reply of any sub-type also teaches the session directly.
+        for candidate in AmbientType::ALL {
+            if candidate == dialect.ambient {
+                continue;
+            }
+            session.set_dialect(Dialect::v2(candidate));
+            try_send(&mut session, &Request::GetAmbientSound)?;
+            let updates = forward(&mut session, events, Duration::from_millis(500))?;
+            if updates
+                .iter()
+                .any(|n| matches!(n, Notification::AmbientSound(_)))
+            {
+                got_ambient = true;
+                break;
+            }
+        }
+        if !got_ambient {
             session.set_dialect(dialect);
         }
     }
@@ -245,6 +255,7 @@ mod tests {
             mode: AmbientMode::AmbientSound,
             level: 5,
             focus_on_voice: false,
+            ..AmbientSound::default()
         };
         let mut connected = false;
         let mut sent = false;
@@ -272,5 +283,38 @@ mod tests {
             }
         }
         panic!("did not receive the ambient sound update");
+    }
+
+    #[test]
+    fn learns_xm6_ambient_format_and_controls_it() {
+        let device = transport::simulator::demo_devices()
+            .into_iter()
+            .find(|d| d.name == "WH-1000XM6")
+            .unwrap();
+        let conn = Connection::spawn(device, || {});
+        let target = AmbientSound {
+            mode: AmbientMode::AmbientSound,
+            level: 7,
+            auto_ambient: true,
+            ..AmbientSound::default()
+        };
+        let mut sent = false;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            match conn.events.recv_timeout(Duration::from_millis(100)) {
+                Ok(Event::Update(Notification::AmbientSound(a))) if !sent => {
+                    assert_eq!(a.mode, AmbientMode::NoiseCancelling);
+                    conn.send(Request::SetAmbientSound {
+                        value: target,
+                        adjusting: false,
+                    });
+                    sent = true;
+                }
+                Ok(Event::Update(Notification::AmbientSound(a))) if sent && a == target => return,
+                Ok(Event::Disconnected(r)) => panic!("disconnected: {r:?}"),
+                _ => {}
+            }
+        }
+        panic!("XM6 ambient sound was not learned / applied");
     }
 }

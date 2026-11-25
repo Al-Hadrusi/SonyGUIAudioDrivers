@@ -35,6 +35,8 @@ pub enum AmbientType {
     Basic,
     /// `0x17`: adds wind noise reduction (e.g. WF-1000XM5).
     WithWind,
+    /// `0x19`: adds "Auto Ambient Sound" (noise adaptation), e.g. WH-1000XM6.
+    NoiseAdaptive,
 }
 
 impl AmbientType {
@@ -42,6 +44,7 @@ impl AmbientType {
         match self {
             AmbientType::Basic => 0x15,
             AmbientType::WithWind => 0x17,
+            AmbientType::NoiseAdaptive => 0x19,
         }
     }
 
@@ -49,16 +52,16 @@ impl AmbientType {
         match code {
             0x15 => Some(AmbientType::Basic),
             0x17 => Some(AmbientType::WithWind),
+            0x19 => Some(AmbientType::NoiseAdaptive),
             _ => None,
         }
     }
 
-    pub fn other(self) -> Self {
-        match self {
-            AmbientType::Basic => AmbientType::WithWind,
-            AmbientType::WithWind => AmbientType::Basic,
-        }
-    }
+    pub const ALL: [AmbientType; 3] = [
+        AmbientType::Basic,
+        AmbientType::WithWind,
+        AmbientType::NoiseAdaptive,
+    ];
 }
 
 /// Everything needed to encode / decode messages for a particular headset.
@@ -200,6 +203,46 @@ pub struct AmbientSound {
     /// Ambient sound level, 0..=20 (the UI uses 1..=20).
     pub level: u8,
     pub focus_on_voice: bool,
+    /// "Auto Ambient Sound" (only on [`AmbientType::NoiseAdaptive`] headsets).
+    pub auto_ambient: bool,
+    pub auto_sensitivity: AutoAmbientSensitivity,
+}
+
+/// Sensitivity of "Auto Ambient Sound".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AutoAmbientSensitivity {
+    #[default]
+    Standard,
+    High,
+    Low,
+}
+
+impl AutoAmbientSensitivity {
+    pub const ALL: [AutoAmbientSensitivity; 3] = [
+        AutoAmbientSensitivity::Standard,
+        AutoAmbientSensitivity::High,
+        AutoAmbientSensitivity::Low,
+    ];
+    fn code(self) -> u8 {
+        match self {
+            AutoAmbientSensitivity::Standard => 0,
+            AutoAmbientSensitivity::High => 1,
+            AutoAmbientSensitivity::Low => 2,
+        }
+    }
+    fn from_code(c: u8) -> Self {
+        AutoAmbientSensitivity::ALL
+            .into_iter()
+            .find(|x| x.code() == c)
+            .unwrap_or_default()
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            AutoAmbientSensitivity::Standard => "Standard",
+            AutoAmbientSensitivity::High => "High",
+            AutoAmbientSensitivity::Low => "Low",
+        }
+    }
 }
 
 impl Default for AmbientSound {
@@ -208,6 +251,8 @@ impl Default for AmbientSound {
             mode: AmbientMode::NoiseCancelling,
             level: 20,
             focus_on_voice: false,
+            auto_ambient: false,
+            auto_sensitivity: AutoAmbientSensitivity::Standard,
         }
     }
 }
@@ -849,7 +894,11 @@ impl Request {
             }
             op::AMBIENT_SET => {
                 let value = parse_ambient(p, d).ok()?;
-                let adjusting = !v2 && at(2) == Some(0x10);
+                let adjusting = if v2 {
+                    at(2) == Some(0x00)
+                } else {
+                    at(2) == Some(0x10)
+                };
                 Request::SetAmbientSound { value, adjusting }
             }
             op::EQ_GET => Request::GetEqualizer,
@@ -942,7 +991,18 @@ fn ambient_payload(opcode: u8, value: &AmbientSound, adjusting: bool, d: Dialect
         ProtocolVersion::V2 => {
             let on = u8::from(value.mode != AmbientMode::Off);
             let ambient = u8::from(value.mode == AmbientMode::AmbientSound);
-            let mut p = vec![opcode, d.ambient.code(), 0x01, on, ambient];
+            // Value-change status: 0x00 while a slider is dragged, 0x01 when done.
+            let status = u8::from(!adjusting);
+            let mut p = vec![opcode, d.ambient.code(), status, on, ambient];
+            if d.ambient == AmbientType::NoiseAdaptive {
+                p.extend([
+                    fov,
+                    level.max(AMBIENT_LEVEL_MIN),
+                    u8::from(value.auto_ambient),
+                    value.auto_sensitivity.code(),
+                ]);
+                return p;
+            }
             if d.ambient == AmbientType::WithWind {
                 p.push(if value.mode == AmbientMode::WindReduction {
                     0x03
@@ -978,6 +1038,7 @@ fn parse_ambient(p: &[u8], d: Dialect) -> Result<AmbientSound, ParseError> {
                 mode,
                 level: p[7].min(AMBIENT_LEVEL_MAX),
                 focus_on_voice: p[6] == 0x01,
+                ..AmbientSound::default()
             })
         }
         ProtocolVersion::V2 => {
@@ -986,6 +1047,24 @@ fn parse_ambient(p: &[u8], d: Dialect) -> Result<AmbientSound, ParseError> {
                 opcode,
                 reason: "not an ambient sound message",
             })?;
+            if kind == AmbientType::NoiseAdaptive {
+                // [op, 0x19, status, on, nc/asm, voice, level, auto on, auto sensitivity]
+                need(p, 9)?;
+                let mode = if p[3] == 0x00 {
+                    AmbientMode::Off
+                } else if p[4] == 0x01 {
+                    AmbientMode::AmbientSound
+                } else {
+                    AmbientMode::NoiseCancelling
+                };
+                return Ok(AmbientSound {
+                    mode,
+                    level: p[6].min(AMBIENT_LEVEL_MAX),
+                    focus_on_voice: p[5] == 0x01,
+                    auto_ambient: p[7] == 0x01,
+                    auto_sensitivity: AutoAmbientSensitivity::from_code(p[8]),
+                });
+            }
             let with_wind = kind == AmbientType::WithWind && p.len() >= 8;
             let mode = if p[3] == 0x00 {
                 AmbientMode::Off
@@ -1001,6 +1080,7 @@ fn parse_ambient(p: &[u8], d: Dialect) -> Result<AmbientSound, ParseError> {
                 mode,
                 level: p[i + 1].min(AMBIENT_LEVEL_MAX),
                 focus_on_voice: p[i] == 0x01,
+                ..AmbientSound::default()
             })
         }
     }
@@ -1290,8 +1370,10 @@ impl Notification {
             }
             Notification::AmbientSound(a) => {
                 let mut p = ambient_payload(op::AMBIENT_NOTIFY, a, false, d);
-                if let Some(last) = p.last_mut() {
-                    *last = a.level; // the headset reports the remembered level
+                // V1 requests omit the level outside ambient mode, but the
+                // headset reports the remembered level (last byte).
+                if !v2 && let Some(last) = p.last_mut() {
+                    *last = a.level;
                 }
                 p
             }
@@ -1390,7 +1472,11 @@ mod tests {
         version: ProtocolVersion::V2,
         ambient: AmbientType::WithWind,
     };
-    const ALL_DIALECTS: [Dialect; 3] = [Dialect::V1, XM5, WF_XM5];
+    const XM6_D: Dialect = Dialect {
+        version: ProtocolVersion::V2,
+        ambient: AmbientType::NoiseAdaptive,
+    };
+    const ALL_DIALECTS: [Dialect; 4] = [Dialect::V1, XM5, WF_XM5, XM6_D];
 
     #[test]
     fn v1_ambient_bytes() {
@@ -1407,6 +1493,7 @@ mod tests {
                 mode: AmbientMode::AmbientSound,
                 level: 15,
                 focus_on_voice: true,
+                ..AmbientSound::default()
             },
             adjusting: true,
         };
@@ -1422,6 +1509,7 @@ mod tests {
             mode: AmbientMode::AmbientSound,
             level: 12,
             focus_on_voice: true,
+            ..AmbientSound::default()
         };
         let set = |v| Request::SetAmbientSound {
             value: v,
@@ -1436,6 +1524,7 @@ mod tests {
             mode: AmbientMode::NoiseCancelling,
             level: 12,
             focus_on_voice: false,
+            ..AmbientSound::default()
         };
         assert_eq!(
             set(nc).payload(XM5).unwrap(),
@@ -1502,6 +1591,60 @@ mod tests {
             vec![0x58, 0x00, 0x16, 0x00]
         );
         assert_eq!(Request::SetTouchSensor(true).payload(XM5), None);
+    }
+
+    #[test]
+    fn xm6_noise_adaptive_ambient_format() {
+        const XM6: Dialect = Dialect {
+            version: ProtocolVersion::V2,
+            ambient: AmbientType::NoiseAdaptive,
+        };
+        // [69, 19, status, on, nc/asm, voice, level, auto, sensitivity]
+        let parsed =
+            Notification::parse(&[0x69, 0x19, 0x01, 0x01, 0x01, 0x01, 0x0C, 0x01, 0x02], XM5)
+                .unwrap();
+        assert_eq!(
+            parsed,
+            Notification::AmbientSound(AmbientSound {
+                mode: AmbientMode::AmbientSound,
+                level: 12,
+                focus_on_voice: true,
+                auto_ambient: true,
+                auto_sensitivity: AutoAmbientSensitivity::Low,
+            })
+        );
+        assert_eq!(
+            Notification::ambient_type_of(&[0x69, 0x19, 0x01]),
+            Some(AmbientType::NoiseAdaptive)
+        );
+        let nc = Request::SetAmbientSound {
+            value: AmbientSound::default(),
+            adjusting: false,
+        };
+        assert_eq!(
+            nc.payload(XM6).unwrap(),
+            vec![0x68, 0x19, 0x01, 0x01, 0x00, 0x00, 20, 0x00, 0x00]
+        );
+        let dragging = Request::SetAmbientSound {
+            value: AmbientSound {
+                mode: AmbientMode::AmbientSound,
+                level: 5,
+                ..AmbientSound::default()
+            },
+            adjusting: true,
+        };
+        assert_eq!(
+            dragging.payload(XM6).unwrap(),
+            vec![0x68, 0x19, 0x00, 0x01, 0x01, 0x00, 5, 0x00, 0x00]
+        );
+        assert_eq!(
+            Request::decode(&dragging.payload(XM6).unwrap(), XM6),
+            Some(dragging)
+        );
+        assert_eq!(
+            Request::GetAmbientSound.payload(XM6).unwrap(),
+            vec![0x66, 0x19]
+        );
     }
 
     #[test]
@@ -1623,6 +1766,7 @@ mod tests {
                     mode: AmbientMode::AmbientSound,
                     level: 12,
                     focus_on_voice: true,
+                    ..AmbientSound::default()
                 },
                 adjusting: false,
             },
@@ -1631,6 +1775,7 @@ mod tests {
                     mode: AmbientMode::NoiseCancelling,
                     level: 0,
                     focus_on_voice: false,
+                    ..AmbientSound::default()
                 },
                 adjusting: false,
             },
@@ -1650,9 +1795,17 @@ mod tests {
         for d in ALL_DIALECTS {
             for r in &samples {
                 let bytes = r.payload(d).unwrap();
+                // The 0x19 format always sends a level of at least 1.
+                let mut expected = r.clone();
+                if let Request::SetAmbientSound { value, .. } = &mut expected
+                    && d.ambient == AmbientType::NoiseAdaptive
+                    && d.is_v2()
+                {
+                    value.level = value.level.max(AMBIENT_LEVEL_MIN);
+                }
                 assert_eq!(
                     Request::decode(&bytes, d).as_ref(),
-                    Some(r),
+                    Some(&expected),
                     "{d:?} {bytes:02x?}"
                 );
             }
@@ -1702,6 +1855,7 @@ mod tests {
                 mode,
                 level: 9,
                 focus_on_voice: mode == AmbientMode::AmbientSound,
+                ..AmbientSound::default()
             }));
         }
         for d in ALL_DIALECTS {
@@ -1718,6 +1872,7 @@ mod tests {
             mode: AmbientMode::WindReduction,
             level: 3,
             focus_on_voice: false,
+            ..AmbientSound::default()
         });
         assert_eq!(
             Notification::parse(&wind.payload(WF_XM5), WF_XM5).unwrap(),

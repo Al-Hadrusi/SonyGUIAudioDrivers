@@ -767,6 +767,32 @@ impl DeviceView {
                 ) {
                     self.send_ambient(false);
                 }
+                if self.dialect.ambient == AmbientType::NoiseAdaptive && self.dialect.is_v2() {
+                    divider(ui);
+                    if switch_row(
+                        ui,
+                        "Auto Ambient Sound",
+                        Some("Adjusts the ambient sound level to the noise around you"),
+                        &mut self.ambient.auto_ambient,
+                    ) {
+                        self.send_ambient(false);
+                    }
+                    if self.ambient.auto_ambient {
+                        ui.label(RichText::new("Sensitivity").size(14.0).color(SUBTEXT));
+                        let labels: Vec<&str> = AutoAmbientSensitivity::ALL
+                            .iter()
+                            .map(|x| x.label())
+                            .collect();
+                        let mut idx = AutoAmbientSensitivity::ALL
+                            .iter()
+                            .position(|x| *x == self.ambient.auto_sensitivity)
+                            .unwrap_or(0);
+                        if segmented(ui, &labels, &mut idx, true) {
+                            self.ambient.auto_sensitivity = AutoAmbientSensitivity::ALL[idx];
+                            self.send_ambient(false);
+                        }
+                    }
+                }
             } else if matches!(
                 self.ambient.mode,
                 AmbientMode::NoiseCancelling | AmbientMode::WindReduction
