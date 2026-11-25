@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::transport::DeviceInfo;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     /// The headset the user connected to last (never a demo device).
     pub last_device: Option<DeviceInfo>,
@@ -16,6 +16,10 @@ pub struct Config {
     pub auto_connect: bool,
     /// The user removed the application-menu entry: don't re-create it.
     pub menu_entry_removed: bool,
+    /// Tab shown last on the device screen ("status", "sound", "system").
+    pub last_tab: Option<String>,
+    /// Window size (logical pixels) when the app was closed.
+    pub window_size: Option<(f32, f32)>,
 }
 
 impl Default for Config {
@@ -24,6 +28,8 @@ impl Default for Config {
             last_device: None,
             auto_connect: true,
             menu_entry_removed: false,
+            last_tab: None,
+            window_size: None,
         }
     }
 }
@@ -85,6 +91,18 @@ impl Config {
                 "last_name" if !value.is_empty() => name = Some(value),
                 "auto_connect" => cfg.auto_connect = value != "false",
                 "menu_entry_removed" => cfg.menu_entry_removed = value == "true",
+                "last_tab" if matches!(value.as_str(), "status" | "sound" | "system") => {
+                    cfg.last_tab = Some(value)
+                }
+                "window_size" => {
+                    let parsed = value.split_once('x').and_then(|(w, h)| {
+                        Some((w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?))
+                    });
+                    // Ignore nonsense (e.g. a minimised window).
+                    cfg.window_size = parsed.filter(|(w, h)| {
+                        (200.0..=10_000.0).contains(w) && (200.0..=10_000.0).contains(h)
+                    });
+                }
                 _ => {}
             }
         }
@@ -108,6 +126,12 @@ impl Config {
         }
         out.push_str(&format!("auto_connect={}\n", self.auto_connect));
         out.push_str(&format!("menu_entry_removed={}\n", self.menu_entry_removed));
+        if let Some(tab) = &self.last_tab {
+            out.push_str(&format!("last_tab={tab}\n"));
+        }
+        if let Some((w, h)) = self.window_size {
+            out.push_str(&format!("window_size={w:.0}x{h:.0}\n"));
+        }
         out
     }
 }
@@ -126,8 +150,13 @@ mod tests {
             }),
             auto_connect: false,
             menu_entry_removed: true,
+            last_tab: Some("sound".into()),
+            window_size: Some((412.0, 880.0)),
         };
         assert_eq!(Config::parse(&cfg.serialize()), cfg);
+        // Out-of-range or malformed values are ignored.
+        let odd = Config::parse("window_size=0x0\nlast_tab=../../etc\n");
+        assert_eq!((odd.window_size, odd.last_tab), (None, None));
         assert_eq!(
             Config::parse(&Config::default().serialize()),
             Config::default()
@@ -148,6 +177,8 @@ mod tests {
             }),
             auto_connect: true,
             menu_entry_removed: false,
+            last_tab: None,
+            window_size: None,
         };
         let parsed = Config::parse(&cfg.serialize());
         assert!(parsed.auto_connect);
@@ -161,6 +192,8 @@ mod tests {
             last_device: None,
             auto_connect: false,
             menu_entry_removed: false,
+            last_tab: None,
+            window_size: None,
         };
         cfg.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path), cfg);

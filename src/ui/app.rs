@@ -6,8 +6,10 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, Sense, Ui, vec2};
 
+use super::notify;
 use super::theme::{self, *};
 use super::widgets::*;
+use headphones_control::battery_alert::LowBatteryAlert;
 use headphones_control::config::Config;
 use headphones_control::desktop_entry;
 use headphones_control::protocol::*;
@@ -32,6 +34,22 @@ pub enum Tab {
     System,
 }
 
+impl Tab {
+    pub fn key(self) -> &'static str {
+        match self {
+            Tab::Status => "status",
+            Tab::Sound => "sound",
+            Tab::System => "system",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Tab::Status, Tab::Sound, Tab::System]
+            .into_iter()
+            .find(|t| t.key() == key)
+    }
+}
+
 pub struct App {
     screen: Screen,
     devices: Vec<DeviceInfo>,
@@ -39,6 +57,8 @@ pub struct App {
     scanning: Option<Receiver<(Vec<DeviceInfo>, Option<String>)>>,
     toast: Option<(String, Instant)>,
     start_tab: Tab,
+    /// Current window size, saved on exit.
+    window_size: Option<(f32, f32)>,
     show_demo: bool,
 
     config: Config,
@@ -72,7 +92,8 @@ pub struct LaunchOptions {
     pub show_demo: bool,
     /// Connect straight to a simulated device of this model (`--demo <MODEL>`).
     pub demo: Option<String>,
-    pub tab: Tab,
+    /// Tab to open (`--tab`); otherwise the last one used.
+    pub tab: Option<Tab>,
 }
 
 struct DeviceView {
@@ -91,6 +112,7 @@ struct DeviceView {
     battery: Option<Battery>,
     battery_right: Option<Battery>,
     battery_case: Option<Battery>,
+    battery_alert: LowBatteryAlert,
 
     speak_to_chat: bool,
     stc: SpeakToChatConfig,
@@ -125,7 +147,8 @@ impl App {
             device_note: None,
             scanning: None,
             toast: None,
-            start_tab: opts.tab,
+            start_tab: Tab::Status,
+            window_size: None,
             show_demo: opts.show_demo || opts.demo.is_some(),
             config: Config::load(),
             suppress_auto: opts.demo.is_some(),
@@ -144,6 +167,10 @@ impl App {
             Ok(tray) => app.tray = Some(tray),
             Err(e) => app.tray_note = Some(e),
         }
+        app.start_tab = opts
+            .tab
+            .or_else(|| app.config.last_tab.as_deref().and_then(Tab::from_key))
+            .unwrap_or_default();
         app.ensure_menu_entry();
         app.rescan(&cc.egui_ctx, true);
         if let Some(model) = opts.demo {
@@ -319,7 +346,28 @@ impl App {
 impl eframe::App for App {
     /// Non-UI work; eframe also calls this while the window is hidden in the
     /// tray, so the connection keeps being serviced.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.window_size.is_some() && self.window_size != self.config.window_size {
+            self.config.window_size = self.window_size;
+            self.save_config();
+        }
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(r) = ctx.input(|i| i.viewport().inner_rect)
+            && !ctx.input(|i| i.viewport().minimized.unwrap_or(false))
+        {
+            self.window_size = Some((r.width().round(), r.height().round()));
+        }
+        // Remember the tab for next time.
+        if let Screen::Device(view) = &self.screen {
+            let key = view.tab.key();
+            if self.config.last_tab.as_deref() != Some(key) {
+                self.config.last_tab = Some(key.to_string());
+                self.start_tab = view.tab;
+                self.save_config();
+            }
+        }
         if let Some(rx) = &self.scanning
             && let Ok((devices, note)) = rx.try_recv()
         {
@@ -741,6 +789,7 @@ impl DeviceView {
             battery: None,
             battery_right: None,
             battery_case: None,
+            battery_alert: LowBatteryAlert::default(),
             speak_to_chat: false,
             stc: SpeakToChatConfig::default(),
             touch_panel: true,
@@ -761,7 +810,28 @@ impl DeviceView {
         }
     }
 
+    /// Warn (desktop notification) when the headset battery runs low. For
+    /// earbuds the emptier bud counts; the charging case doesn't.
+    fn check_battery(&mut self) {
+        let buds = [self.battery, self.battery_right];
+        let Some(lowest) = buds.iter().flatten().map(|b| b.level).min() else {
+            return;
+        };
+        let charging = buds.iter().flatten().all(|b| b.charging);
+        if let Some(alert) = self.battery_alert.update(lowest, charging) {
+            notify::battery(&self.info.name, alert);
+        }
+    }
+
     fn apply(&mut self, n: Notification) {
+        let battery_update = matches!(n, Notification::Battery { .. });
+        self.apply_inner(n);
+        if battery_update {
+            self.check_battery();
+        }
+    }
+
+    fn apply_inner(&mut self, n: Notification) {
         match n {
             Notification::AmbientSound(a) => {
                 self.ambient = a;

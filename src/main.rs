@@ -28,12 +28,9 @@ fn parse_args() -> Result<LaunchOptions, String> {
                 }
             }
             "--tab" => {
-                opts.tab = match args.next().as_deref() {
-                    Some("status") => Tab::Status,
-                    Some("sound") => Tab::Sound,
-                    Some("system") => Tab::System,
-                    _ => return Err("--tab must be status, sound or system".into()),
-                }
+                let key = args.next().unwrap_or_default();
+                opts.tab =
+                    Some(Tab::from_key(&key).ok_or("--tab must be status, sound or system")?);
             }
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -63,7 +60,14 @@ fn main() -> eframe::Result {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Headphones Control")
             .with_app_id("headphones-control")
-            .with_inner_size([ui::theme::PHONE_WIDTH, ui::theme::PHONE_HEIGHT])
+            .with_inner_size(
+                headphones_control::config::Config::load()
+                    .window_size
+                    .map_or(
+                        [ui::theme::PHONE_WIDTH, ui::theme::PHONE_HEIGHT],
+                        |(w, h)| [w, h],
+                    ),
+            )
             .with_min_inner_size([340.0, 560.0])
             .with_icon(window_icon()),
         ..Default::default()

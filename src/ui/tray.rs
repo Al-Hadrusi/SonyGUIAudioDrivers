@@ -40,6 +40,8 @@ struct TrayModel {
     tx: Sender<TrayCommand>,
     ctx: egui::Context,
     icon: Vec<Icon>,
+    /// The plain app icon, used to redraw `icon` with a battery bar.
+    base_icon: Vec<Icon>,
     available: Arc<AtomicBool>,
 }
 
@@ -187,6 +189,7 @@ impl Tray {
             tx,
             ctx: ctx.clone(),
             icon: tray_icon(),
+            base_icon: tray_icon(),
             available: Arc::clone(&available),
         };
         match model.spawn() {
@@ -214,7 +217,15 @@ impl Tray {
             return;
         }
         self.last.clone_from(&status);
-        self.handle.update(move |m| m.status = status);
+        self.handle.update(move |m| {
+            let battery = status.as_ref().and_then(|s| s.battery);
+            m.icon = m
+                .base_icon
+                .iter()
+                .map(|i| with_battery_bar(i, battery))
+                .collect();
+            m.status = status;
+        });
     }
 }
 
@@ -226,6 +237,47 @@ impl Drop for Tray {
 }
 
 /// The app icon in the ARGB32 (network byte order) format of the tray spec.
+/// Draw a small battery bar along the bottom of the icon (green, then orange
+/// below 30 %, red below 15 %).
+fn with_battery_bar(icon: &Icon, level: Option<u8>) -> Icon {
+    let mut out = Icon {
+        width: icon.width,
+        height: icon.height,
+        data: icon.data.clone(),
+    };
+    let Some(level) = level else { return out };
+    let (Ok(w), Ok(h)) = (usize::try_from(icon.width), usize::try_from(icon.height)) else {
+        return out;
+    };
+    if w < 16 || h < 16 || out.data.len() != w * h * 4 {
+        return out;
+    }
+    let (x0, x1) = (w / 10, w - w / 10);
+    let (y0, y1) = (h - h / 6, h - h / 32);
+    let filled = x0 + (x1 - x0) * usize::from(level.min(100)) / 100;
+    let color: [u8; 4] = if level < 15 {
+        [0xFF, 0xFF, 0x45, 0x3A]
+    } else if level < 30 {
+        [0xFF, 0xF5, 0xA3, 0x1B]
+    } else {
+        [0xFF, 0x4C, 0xD9, 0x64]
+    };
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let px = if x < filled {
+                color
+            } else {
+                [0xFF, 0x30, 0x30, 0x35]
+            };
+            let i = (y * w + x) * 4;
+            if let Some(dst) = out.data.get_mut(i..i + 4) {
+                dst.copy_from_slice(&px);
+            }
+        }
+    }
+    out
+}
+
 fn tray_icon() -> Vec<Icon> {
     let Ok(img) =
         eframe::icon_data::from_png_bytes(include_bytes!("../../assets/headphones-control-64.png"))
