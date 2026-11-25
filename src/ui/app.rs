@@ -48,6 +48,11 @@ pub struct App {
     /// Whether the running scan was started by the user (shows a spinner).
     scan_visible: bool,
     last_auto_attempt: Option<Instant>,
+    #[cfg(all(feature = "tray", target_os = "linux"))]
+    tray: Option<super::tray::Tray>,
+    /// Set when "Quit" was chosen in the tray (then closing really quits).
+    #[cfg(all(feature = "tray", target_os = "linux"))]
+    quitting: bool,
 }
 
 /// How often the device list is refreshed in the background.
@@ -120,6 +125,10 @@ impl App {
             last_scan: Instant::now(),
             scan_visible: true,
             last_auto_attempt: None,
+            #[cfg(all(feature = "tray", target_os = "linux"))]
+            tray: super::tray::Tray::spawn(&cc.egui_ctx),
+            #[cfg(all(feature = "tray", target_os = "linux"))]
+            quitting: false,
         };
         app.rescan(&cc.egui_ctx, true);
         if let Some(model) = opts.demo {
@@ -267,23 +276,31 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+    /// Non-UI work; eframe also calls this while the window is hidden in the
+    /// tray, so the connection keeps being serviced.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(rx) = &self.scanning
             && let Ok((devices, note)) = rx.try_recv()
         {
             self.devices = devices;
             self.device_note = note;
             self.scanning = None;
-            self.maybe_auto_connect(&ctx);
+            self.maybe_auto_connect(ctx);
         }
         self.process_events();
         if matches!(self.screen, Screen::Devices)
             && self.scanning.is_none()
             && self.last_scan.elapsed() >= BACKGROUND_SCAN
         {
-            self.rescan(&ctx, false);
+            self.rescan(ctx, false);
         }
+        #[cfg(all(feature = "tray", target_os = "linux"))]
+        self.tray_logic(ctx);
+        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))
@@ -345,8 +362,55 @@ impl eframe::App for App {
             });
 
         self.show_toast(&ctx);
-        // Keep animations and the simulated device ticking.
-        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+}
+
+#[cfg(all(feature = "tray", target_os = "linux"))]
+impl App {
+    fn tray_logic(&mut self, ctx: &egui::Context) {
+        use super::tray::{TrayCommand, TrayStatus};
+        use egui::ViewportCommand;
+
+        let Some(tray) = &mut self.tray else { return };
+        let commands: Vec<TrayCommand> = tray.commands.try_iter().collect();
+        let can_hide = tray.is_visible() && std::env::var_os("WAYLAND_DISPLAY").is_none();
+        for cmd in commands {
+            match cmd {
+                TrayCommand::ShowWindow => {
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                }
+                TrayCommand::SetAmbient(mode) => {
+                    if let Screen::Device(view) = &mut self.screen {
+                        view.set_ambient_mode(mode);
+                    }
+                }
+                TrayCommand::Quit => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+            }
+        }
+
+        // Closing the window keeps the app running in the tray, but only
+        // when a tray host is showing the icon (so it can be reopened).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && can_hide {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+        }
+
+        let status = match &self.screen {
+            Screen::Device(view) => Some(TrayStatus {
+                name: view.info.name.clone(),
+                battery: view.battery.map(|b| b.level),
+                mode: view.ambient.mode,
+            }),
+            _ => None,
+        };
+        if let Some(tray) = &mut self.tray {
+            tray.set_status(status);
+        }
     }
 }
 
@@ -664,6 +728,19 @@ impl DeviceView {
             Notification::AutoPowerOff(apo) => self.auto_power_off = apo,
             Notification::InitReply(_) | Notification::Unknown(_) => {}
         }
+    }
+
+    /// Switch NC / ambient / off (used by the tray menu).
+    #[cfg_attr(not(all(feature = "tray", target_os = "linux")), allow(dead_code))]
+    fn set_ambient_mode(&mut self, mode: AmbientMode) {
+        if self.ambient.mode == mode {
+            return;
+        }
+        self.ambient.mode = mode;
+        if mode != AmbientMode::Off {
+            self.last_on_mode = mode;
+        }
+        self.send_ambient(false);
     }
 
     fn send_ambient(&self, adjusting: bool) {

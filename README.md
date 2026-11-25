@@ -1,5 +1,7 @@
 # Headphones Control for Linux (unofficial)
 
+[![CI](https://github.com/Al-Hadrusi/SonyGUIAudioDrivers/actions/workflows/ci.yml/badge.svg)](https://github.com/Al-Hadrusi/SonyGUIAudioDrivers/actions/workflows/ci.yml)
+
 A desktop companion app for Sony Bluetooth headphones and earbuds, written in **100% safe Rust**
 (`unsafe_code = "forbid"` is set for the whole crate, so the compiler rejects any `unsafe` block).
 
@@ -27,23 +29,30 @@ illustration, battery levels, and **Status / Sound / System** tabs.
 | Speak-to-Chat on/off | Status |
 | Battery (headphones; earbuds L / R / case) | Header |
 | Bluetooth codec (SBC / AAC / LDAC / aptX / LC3) | Header, Status |
+| Auto Ambient Sound + sensitivity (WH-1000XM6) | Status |
+| Play / pause / next / previous, music volume (0–30) | Status |
 | Listening Mode: Standard / BGM (My Room, Living Room, Café) / Cinema (WH-1000XM6 and other models that support it) | Sound |
 | Surround (VPT): Arena / Club / Outdoor Stage / Concert Hall (older V1 models that support it) | Sound |
-| Equalizer presets + Manual / Custom 1 / Custom 2, with Clear Bass and 5 bands (−10…+10) | Sound |
+| Equalizer: Clear Bass + 5 bands (−10…+10), or 10 bands 31 Hz–16 kHz (−6…+6) on the WH-1000XM6, with each model's presets and Manual / Custom slots | Sound |
 | DSEE Extreme (upscaling) | Sound |
+| Bluetooth connection quality: sound quality / stable connection | Sound |
 | Speak-to-Chat sensitivity, voice focus, mode duration | System |
 | Touch sensor control panel | System |
 | Pause when taken off | System |
 | Automatic power off | System |
+| NC/AMB button: what the button cycles through | System |
+| Voice guidance on/off and volume | System |
 | Firmware version, power off, disconnect | System |
+| Remembers the last headset and reconnects when it is switched on | Device list |
+| System tray icon: switch NC / Ambient / Off, keeps running when the window is closed | Tray |
 
 Both protocol generations are supported and detected automatically from the headset's init reply:
 
 * **V1**: WH-1000XM3, WH-1000XM4, WF-1000XM3, ...
 * **V2**: WH-1000XM5, WH-1000XM6, WF-1000XM4, WF-1000XM5, LinkBuds, ...
 
-Settings a model doesn't have (for example the touch sensor toggle on V2, or wind noise reduction on
-the WH-1000XM5) are hidden.
+Settings a model doesn't have are hidden: each card only appears once the headset answers the
+query for it.
 
 For development, four **simulated devices** are built in: WH-1000XM6 (V2 with Listening Mode),
 WH-1000XM5 (V2), WF-1000XM5 (V2 earbuds) and WH-1000XM4 (V1 with Surround). They speak the real wire
@@ -69,6 +78,23 @@ Or open one directly:
 ```bash
 cargo run --release -- --demo WH-1000XM6 --tab sound
 ```
+
+### Install (launcher, icon)
+
+From the repository root, this builds the app and installs it for your user into `~/.local`
+(binary, application-menu entry and icon):
+
+```bash
+./packaging/linux/install.sh
+```
+
+Remove it again with:
+
+```bash
+./packaging/linux/install.sh uninstall
+```
+
+Use `PREFIX=/usr/local` (with `sudo`) for a system-wide install.
 
 ### Linux (real headsets)
 
@@ -126,6 +152,41 @@ sudo systemctl enable --now bluetooth
 Then pair the headset (for example with `bluetoothctl`: `scan on`, `pair <MAC>`, `trust <MAC>`,
 `connect <MAC>`) and run `cargo run --release`.
 
+#### Installing with Portage
+
+`packaging/gentoo` is a small overlay with a live ebuild (`media-sound/headphones-control-9999`,
+USE flags `bluetooth` and `tray`, both on by default). Register it with Portage by running this
+from the root of your clone:
+
+```bash
+printf '[headphones-control]\nlocation = %s\n' "$PWD/packaging/gentoo" | sudo tee /etc/portage/repos.conf/headphones-control.conf
+```
+
+Live ebuilds are not keyworded, so accept it:
+
+```bash
+echo "media-sound/headphones-control **" | sudo tee /etc/portage/package.accept_keywords/headphones-control
+```
+
+Then install:
+
+```bash
+sudo emerge --ask media-sound/headphones-control
+```
+
+### System tray
+
+The tray icon (StatusNotifierItem) works with KDE Plasma, XFCE, LXQt, waybar and GNOME with the
+*AppIndicator* extension. Its menu switches between Noise Canceling, Ambient Sound and Off, and its
+tooltip shows the battery level. On X11, closing the window keeps the app running in the tray (use
+**Quit** in the tray menu to exit). On Wayland, and on desktops without a tray, closing the window
+quits as usual.
+
+### Settings file
+
+The last headset and the *Connect automatically* switch are stored in
+`~/.config/headphones-control/settings`.
+
 ### Troubleshooting
 
 Run with `SONY_DEBUG=1` to print every message exchanged with the headset:
@@ -153,6 +214,7 @@ cargo run --release --no-default-features
 ```
 src/
 ├── lib.rs                  #![forbid(unsafe_code)]
+├── config.rs               settings file (last headset, auto-connect)
 ├── protocol/
 │   ├── frame.rs            framing: 0x3E … 0x3C, escaping, checksum, incremental decoder
 │   ├── message.rs          request builders / notification parsers (bounds-checked, never panic)
@@ -161,7 +223,7 @@ src/
 │   ├── bluetooth.rs        BlueZ RFCOMM client (Linux, `bluetooth` feature)
 │   └── simulator.rs        in-process headset emulator
 ├── worker.rs               background connection thread (GUI never blocks on I/O)
-└── ui/                     egui front-end (theme, custom widgets, screens)
+└── ui/                     egui front-end (theme, custom widgets, screens, tray icon)
 ```
 
 The safety measures:
@@ -174,8 +236,9 @@ The safety measures:
 * Slider drags are merged in the worker so the headset isn't flooded with commands.
 
 The protocol opcodes come from public reverse-engineering work by the open-source community
-(Gadgetbridge, and mos9527's SonyHeadphonesClient fork for the Listening Mode messages). Opcodes differ between models and firmware versions. Some
-settings, mainly in the System tab, are send-only and may not apply on every model.
+(Gadgetbridge, and mos9527's SonyHeadphonesClient for the WH-1000XM6 messages). Opcodes differ
+between models and firmware versions, so the app reads each setting back from the headset where the
+protocol allows it, and hides what the headset doesn't answer.
 
 ## Tests
 
@@ -189,4 +252,4 @@ headset.
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).

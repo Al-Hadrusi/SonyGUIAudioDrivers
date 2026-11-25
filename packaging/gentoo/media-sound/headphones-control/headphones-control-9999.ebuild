@@ -16,7 +16,7 @@ LICENSE="MIT"
 # Dependent crate licenses
 LICENSE+=" Apache-2.0 BSD-2 ISC MIT OFL-1.1 Unicode-3.0 UbuntuFontLicense-1.0 ZLIB"
 SLOT="0"
-IUSE="+bluetooth"
+IUSE="+bluetooth +tray"
 
 DEPEND="bluetooth? ( sys-apps/dbus )"
 # The window library loads X11/Wayland/GL libraries at runtime.
@@ -45,6 +45,7 @@ src_unpack() {
 src_configure() {
 	local myfeatures=(
 		$(usev bluetooth)
+		$(usev tray)
 	)
 	cargo_src_configure --no-default-features
 }
