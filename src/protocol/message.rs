@@ -172,6 +172,9 @@ pub mod op {
     pub const TOUCH_SENSOR_NOTIFY: u8 = 0xD9;
     /// "Audio" family. Sub-types (V2): 0x01 upscaling (DSEE),
     /// 0x03 BGM listening mode, 0x04 Cinema listening mode.
+    /// V2 audio *status* (is a feature usable right now); sub-type 0x01 = DSEE.
+    pub const V2_AUDIO_STATUS_RET: u8 = 0xE3;
+    pub const V2_AUDIO_STATUS_NOTIFY: u8 = 0xE5;
     pub const AUDIO_UPSAMPLING_GET: u8 = 0xE6;
     pub const AUDIO_UPSAMPLING_RET: u8 = 0xE7;
     pub const AUDIO_UPSAMPLING_SET: u8 = 0xE8;
@@ -1524,6 +1527,8 @@ pub enum Notification {
     AmbientSound(AmbientSound),
     Equalizer(Equalizer),
     AudioUpsampling(bool),
+    /// V2: whether DSEE can be used right now (BGM/Cinema can block it).
+    UpsamplingAvailable(bool),
     BgmMode {
         on: bool,
         room: RoomSize,
@@ -1663,6 +1668,13 @@ impl Notification {
                         needed: 10,
                         got: p.len(),
                     })
+            }
+            op::V2_AUDIO_STATUS_RET | op::V2_AUDIO_STATUS_NOTIFY
+                if v2 && p.get(1) == Some(&0x01) =>
+            {
+                need(p, 3)?;
+                // 0x00 = enabled (usable), 0x01 = disabled.
+                Ok(Notification::UpsamplingAvailable(p[2] == 0x00))
             }
             op::AUDIO_UPSAMPLING_RET | op::AUDIO_UPSAMPLING_NOTIFY if v2 => {
                 need(p, 3)?;
@@ -1833,6 +1845,9 @@ impl Notification {
                 vec![op2::VOICE_GUIDANCE_NOTIFY, 0x20, v.to_be_bytes()[0]]
             }
             Notification::Surround(mode) => vec![op::V1_SURROUND_NOTIFY, 0x01, mode.code()],
+            Notification::UpsamplingAvailable(ok) => {
+                vec![op::V2_AUDIO_STATUS_NOTIFY, 0x01, v2_flag(*ok)]
+            }
             Notification::AudioUpsampling(on) => {
                 if v2 {
                     vec![op::AUDIO_UPSAMPLING_NOTIFY, 0x01, u8::from(*on)]
@@ -2133,6 +2148,24 @@ mod tests {
             })
         ));
         assert_eq!(EqLayout::TenBand.presets().len(), 8);
+    }
+
+    #[test]
+    fn dsee_availability_from_a_real_wh1000xm6() {
+        // Captured from a WH-1000XM6: Cinema on, then off.
+        assert_eq!(
+            Notification::parse(&[0xE5, 0x01, 0x01], XM5).unwrap(),
+            Notification::UpsamplingAvailable(false)
+        );
+        assert_eq!(
+            Notification::parse(&[0xE5, 0x01, 0x00], XM5).unwrap(),
+            Notification::UpsamplingAvailable(true)
+        );
+        // DSEE on/off itself still parses.
+        assert_eq!(
+            Notification::parse(&[0xE9, 0x01, 0x01], XM5).unwrap(),
+            Notification::AudioUpsampling(true)
+        );
     }
 
     #[test]

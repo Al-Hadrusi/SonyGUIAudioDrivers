@@ -96,9 +96,10 @@ Remove it again with:
 
 Use `PREFIX=/usr/local` (with `sudo`) for a system-wide install.
 
-If you start the app with `cargo run`, you can also use **Add** under *App → Application menu* in the
-device list. It adds a launcher that starts the program you are running. On Wayland (e.g. KDE Plasma)
-this entry is also where the taskbar icon comes from.
+If you just use `cargo run`, the app adds itself to your application menu on first start (a launcher
+for the program you are running, plus its icon). On Wayland (e.g. KDE Plasma) this entry is also the
+only source of the window/taskbar icon, so restart the app once afterwards. *App → Application menu*
+in the device list removes it again, and the app then leaves your menu alone.
 
 ### Linux (real headsets)
 

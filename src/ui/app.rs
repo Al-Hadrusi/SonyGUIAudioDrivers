@@ -112,6 +112,8 @@ struct DeviceView {
     volume: Option<u8>,
     voice_guidance: Option<bool>,
     voice_volume: Option<i8>,
+    /// `Some(false)` when the current Listening Mode blocks DSEE.
+    upsampling_available: Option<bool>,
 }
 
 impl App {
@@ -142,6 +144,7 @@ impl App {
             Ok(tray) => app.tray = Some(tray),
             Err(e) => app.tray_note = Some(e),
         }
+        app.ensure_menu_entry();
         app.rescan(&cc.egui_ctx, true);
         if let Some(model) = opts.demo {
             let device = DeviceInfo {
@@ -165,6 +168,32 @@ impl App {
             ctx.request_repaint();
         });
         self.scanning = Some(rx);
+    }
+
+    /// On Wayland the taskbar icon comes only from the application-menu
+    /// entry, so create it on first start (unless the user removed it) and
+    /// re-point it when the program it launches has moved.
+    fn ensure_menu_entry(&mut self) {
+        if self.show_demo {
+            return; // development runs don't touch the user's menu
+        }
+        let check = desktop_entry::check();
+        let needed = match check {
+            desktop_entry::EntryCheck::Ok => false,
+            desktop_entry::EntryCheck::Missing => !self.config.menu_entry_removed,
+            desktop_entry::EntryCheck::Stale => true,
+        };
+        if !needed {
+            return;
+        }
+        match desktop_entry::install() {
+            Ok(()) if check == desktop_entry::EntryCheck::Missing => self.toast(
+                "Added Headphones Control to your application menu. Restart the app once to see its icon in the taskbar.",
+            ),
+            Ok(()) => {}
+            Err(e) => self.toast(format!("Could not add the application-menu entry: {e}")),
+        }
+        self.menu_installed = desktop_entry::is_installed();
     }
 
     fn save_config(&mut self) {
@@ -383,6 +412,8 @@ impl eframe::App for App {
                             }
                         }
                         self.menu_installed = desktop_entry::is_installed();
+                        self.config.menu_entry_removed = !add;
+                        self.save_config();
                     }
                     Action::Cancel => {
                         // The user left on purpose: don't reconnect behind their back.
@@ -726,6 +757,7 @@ impl DeviceView {
             volume: None,
             voice_guidance: None,
             voice_volume: None,
+            upsampling_available: None,
         }
     }
 
@@ -778,6 +810,7 @@ impl DeviceView {
             Notification::Volume(v) => self.volume = Some(v),
             Notification::VoiceGuidance(on) => self.voice_guidance = Some(on),
             Notification::VoiceGuidanceVolume(v) => self.voice_volume = Some(v),
+            Notification::UpsamplingAvailable(ok) => self.upsampling_available = Some(ok),
             Notification::SpeakToChat(on) => self.speak_to_chat = on,
             Notification::SpeakToChatConfig(cfg) => {
                 let focus = self.stc.focus_on_voice;
@@ -1313,15 +1346,25 @@ impl DeviceView {
 
         ui.add_space(12.0);
         card(ui, None, |ui| {
-            if switch_row(
-                ui,
-                "DSEE Extreme",
-                Some(
-                    "Upscales compressed digital music files in real time. (Battery life is shortened.)",
-                ),
-                &mut self.upsampling,
-            ) {
-                self.conn.send(Request::SetAudioUpsampling(self.upsampling));
+            let available = self.upsampling_available != Some(false);
+            ui.add_enabled_ui(available, |ui| {
+                if switch_row(
+                    ui,
+                    "DSEE Extreme",
+                    Some(
+                        "Upscales compressed digital music files in real time. (Battery life is shortened.)",
+                    ),
+                    &mut self.upsampling,
+                ) {
+                    self.conn.send(Request::SetAudioUpsampling(self.upsampling));
+                }
+            });
+            if !available {
+                ui.label(
+                    RichText::new("Not available in the current Listening Mode. Switch Listening Mode to Standard to use it.")
+                        .size(12.5)
+                        .color(ACCENT),
+                );
             }
         });
 

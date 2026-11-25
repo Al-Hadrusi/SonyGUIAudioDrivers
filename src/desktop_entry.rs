@@ -41,6 +41,61 @@ pub fn is_installed() -> bool {
     system || data_home().is_some_and(|d| entry_path(&d).exists())
 }
 
+/// The program a user-level entry written by this app launches
+/// (`Exec="<path>"`), undoing both escaping levels of [`quote_exec`].
+fn user_entry_exec(data: &Path) -> Option<PathBuf> {
+    let text = fs::read_to_string(entry_path(data)).ok()?;
+    let line = text.lines().find_map(|l| l.strip_prefix("Exec="))?;
+    let inner = line.strip_prefix('"')?.strip_suffix('"')?;
+    // File-format level: `\\` stands for one backslash.
+    let level1 = inner.replace("\\\\", "\\");
+    // Exec level: a backslash escapes the next character.
+    let mut out = String::new();
+    let mut chars = level1.chars();
+    while let Some(c) = chars.next() {
+        out.push(if c == '\\' { chars.next()? } else { c });
+    }
+    Some(PathBuf::from(out))
+}
+
+/// State of the application-menu entry at startup.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EntryCheck {
+    /// An entry exists and works.
+    Ok,
+    /// No entry anywhere.
+    Missing,
+    /// Our user-level entry points at a program that no longer exists
+    /// (e.g. after `cargo clean`).
+    Stale,
+}
+
+pub fn check_in(data: &Path) -> EntryCheck {
+    if let Some(exe) = user_entry_exec(data) {
+        return if exe.exists() {
+            EntryCheck::Ok
+        } else {
+            EntryCheck::Stale
+        };
+    }
+    let system = ["/usr/share/applications", "/usr/local/share/applications"]
+        .iter()
+        .any(|d| Path::new(d).join(format!("{APP_ID}.desktop")).exists());
+    if system || entry_path(data).exists() {
+        EntryCheck::Ok
+    } else {
+        EntryCheck::Missing
+    }
+}
+
+pub fn check() -> EntryCheck {
+    match data_home() {
+        Some(d) => check_in(&d),
+        None if is_installed() => EntryCheck::Ok,
+        None => EntryCheck::Missing,
+    }
+}
+
 /// Quote a path for the `Exec=` key (Desktop Entry Specification).
 fn quote_exec(path: &str) -> String {
     let mut out = String::from("\"");
@@ -154,6 +209,27 @@ mod tests {
         assert_eq!(quote_exec("/home/my dir/app"), "\"/home/my dir/app\"");
         // $ and " are escaped with a backslash, which the file format doubles.
         assert_eq!(quote_exec("/a$b\"c"), "\"/a\\\\$b\\\\\"c\"");
+    }
+
+    #[test]
+    fn detects_stale_entries_and_reads_exec_back() {
+        let dir = std::env::temp_dir().join(format!("hpc-desktop-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        if !Path::new("/usr/share/applications/headphones-control.desktop").exists() {
+            assert_eq!(check_in(&dir), EntryCheck::Missing);
+        }
+        for odd in [
+            "/nonexistent/dir with space/app",
+            "/nonexistent/a$b\"c\\d`e/app",
+        ] {
+            install_into(&dir, Path::new(odd)).unwrap();
+            assert_eq!(user_entry_exec(&dir).unwrap(), PathBuf::from(odd));
+            assert_eq!(check_in(&dir), EntryCheck::Stale);
+        }
+        let exe = std::env::current_exe().unwrap();
+        install_into(&dir, &exe).unwrap();
+        assert_eq!(check_in(&dir), EntryCheck::Ok);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

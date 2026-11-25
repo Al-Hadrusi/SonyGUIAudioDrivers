@@ -14,6 +14,8 @@ pub struct Config {
     pub last_device: Option<DeviceInfo>,
     /// Connect to `last_device` automatically when it shows up.
     pub auto_connect: bool,
+    /// The user removed the application-menu entry: don't re-create it.
+    pub menu_entry_removed: bool,
 }
 
 impl Default for Config {
@@ -21,6 +23,7 @@ impl Default for Config {
         Self {
             last_device: None,
             auto_connect: true,
+            menu_entry_removed: false,
         }
     }
 }
@@ -81,6 +84,7 @@ impl Config {
                 "last_address" if !value.is_empty() => address = Some(value),
                 "last_name" if !value.is_empty() => name = Some(value),
                 "auto_connect" => cfg.auto_connect = value != "false",
+                "menu_entry_removed" => cfg.menu_entry_removed = value == "true",
                 _ => {}
             }
         }
@@ -103,6 +107,7 @@ impl Config {
             out.push_str(&format!("last_address={}\nlast_name={}\n", d.address, name));
         }
         out.push_str(&format!("auto_connect={}\n", self.auto_connect));
+        out.push_str(&format!("menu_entry_removed={}\n", self.menu_entry_removed));
         out
     }
 }
@@ -120,6 +125,7 @@ mod tests {
                 connected: false,
             }),
             auto_connect: false,
+            menu_entry_removed: true,
         };
         assert_eq!(Config::parse(&cfg.serialize()), cfg);
         assert_eq!(
@@ -141,6 +147,7 @@ mod tests {
                 connected: false,
             }),
             auto_connect: true,
+            menu_entry_removed: false,
         };
         let parsed = Config::parse(&cfg.serialize());
         assert!(parsed.auto_connect);
@@ -153,6 +160,7 @@ mod tests {
         let cfg = Config {
             last_device: None,
             auto_connect: false,
+            menu_entry_removed: false,
         };
         cfg.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path), cfg);
