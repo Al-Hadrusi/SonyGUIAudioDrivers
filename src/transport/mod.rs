@@ -5,6 +5,10 @@ use std::time::Duration;
 
 #[cfg(all(feature = "bluetooth", target_os = "linux"))]
 pub mod bluetooth;
+/// Windows: the same interface on top of WinRT.
+#[cfg(all(feature = "bluetooth", windows))]
+#[path = "windows_bt.rs"]
+pub mod bluetooth;
 pub mod simulator;
 
 /// A bidirectional byte stream to a headset.
@@ -54,7 +58,7 @@ impl DeviceInfo {
 /// support is compiled in), plus the simulated demo devices if `include_demo`.
 pub fn list_devices(include_demo: bool) -> (Vec<DeviceInfo>, Option<String>) {
     let mut devices = Vec::new();
-    #[cfg(all(feature = "bluetooth", target_os = "linux"))]
+    #[cfg(all(feature = "bluetooth", any(target_os = "linux", windows)))]
     let error = match bluetooth::list_paired() {
         Ok(found) => {
             devices.extend(found);
@@ -69,7 +73,7 @@ pub fn list_devices(include_demo: bool) -> (Vec<DeviceInfo>, Option<String>) {
             })
         }
     };
-    #[cfg(not(all(feature = "bluetooth", target_os = "linux")))]
+    #[cfg(not(all(feature = "bluetooth", any(target_os = "linux", windows))))]
     let error = Some("This build has no Bluetooth support (demo devices only).".to_string());
     if include_demo {
         devices.extend(simulator::demo_devices());
@@ -82,13 +86,13 @@ pub fn open(device: &DeviceInfo) -> io::Result<Box<dyn Transport>> {
     if device.is_demo() {
         return Ok(Box::new(simulator::SimulatedHeadset::new(&device.name)));
     }
-    #[cfg(all(feature = "bluetooth", target_os = "linux"))]
+    #[cfg(all(feature = "bluetooth", any(target_os = "linux", windows)))]
     {
         Ok(Box::new(bluetooth::BluetoothTransport::connect(
             &device.address,
         )?))
     }
-    #[cfg(not(all(feature = "bluetooth", target_os = "linux")))]
+    #[cfg(not(all(feature = "bluetooth", any(target_os = "linux", windows))))]
     {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,

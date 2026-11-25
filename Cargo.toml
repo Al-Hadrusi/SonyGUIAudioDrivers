@@ -10,9 +10,9 @@ default-run = "headphones-control"
 
 [features]
 default = ["bluetooth", "tray", "notifications"]
-# Real Bluetooth support through BlueZ (Linux). Without it the app runs with the
-# built-in simulated device only.
-bluetooth = ["dep:bluer", "dep:tokio", "dep:futures"]
+# Real Bluetooth support: BlueZ on Linux, WinRT on Windows. Without it the
+# app runs with the built-in simulated devices only.
+bluetooth = ["dep:bluer", "dep:tokio", "dep:futures", "dep:windows", "dep:windows-future"]
 # System tray icon (StatusNotifierItem, Linux).
 tray = ["dep:ksni"]
 # Desktop notifications (low battery), Linux.
@@ -27,6 +27,19 @@ tokio = { version = "1", features = ["rt", "time", "macros", "io-util"], optiona
 futures = { version = "0.3", optional = true }
 ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"], optional = true }
 notify-rust = { version = "4", default-features = false, features = ["z"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Devices_Bluetooth",
+    "Devices_Bluetooth_Rfcomm",
+    "Devices_Enumeration",
+    "Foundation",
+    "Foundation_Collections",
+    "Networking",
+    "Networking_Sockets",
+    "Storage_Streams",
+] }
+windows-future = { version = "0.3", optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
