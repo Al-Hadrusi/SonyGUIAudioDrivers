@@ -28,12 +28,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check version format
+        shell: bash
         run: |
-          case "$VERSION" in
-            v*) V="${VERSION#v}" ;;
-            *) V="$VERSION" ;;
-          esac
-          if ! printf '%s\n' "$V" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'; then
+          V="${VERSION#v}"
+          # Whole-string match (a grep would accept a multi-line value whose
+          # first line looks fine, letting it inject lines into $GITHUB_ENV).
+          if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
             echo "::error::invalid version: must look like 1.2.3 or 1.2.3-rc.1"
             exit 1
           fi
@@ -113,6 +113,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Signed build provenance: verify a download with
+      #   gh attestation verify <file> --repo Al-Hadrusi/SonyGUIAudioDrivers
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -120,6 +124,12 @@ jobs:
 
       - name: Checksums
         run: sha256sum headphones-control-* > SHA256SUMS
+
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            headphones-control-*
+            SHA256SUMS
 
       - name: Tag name
         run: echo "TAG=v${VERSION#v}" >> "$GITHUB_ENV"

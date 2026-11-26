@@ -3,15 +3,19 @@
 //! these strings, so they are cleaned before they are shown or stored.
 
 /// Is `c` a character that can reorder or hide surrounding text
-/// (Unicode bidirectional controls, zero-width marks)?
+/// (Unicode bidirectional controls, zero-width marks, line separators,
+/// interlinear annotations)?
 fn is_format_control(c: char) -> bool {
     matches!(
         c,
         '\u{061C}'
             | '\u{200B}'..='\u{200F}'
             | '\u{202A}'..='\u{202E}'
+            | '\u{180E}'
+            | '\u{2028}'..='\u{2029}'
             | '\u{2060}'..='\u{2069}'
             | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
     )
 }
 

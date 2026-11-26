@@ -28,6 +28,16 @@ fi
 if [ -x ./headphones-control ]; then
     # Extracted release download: use the bundled program.
     SRC=./headphones-control
+elif [ "$(id -u)" = 0 ]; then
+    # Building as root (sudo) would run every dependency's build script with
+    # root privileges and leave root-owned files in target/. Build as your
+    # own user first; root only copies the result.
+    SRC=target/release/headphones-control
+    if [ ! -x "$SRC" ]; then
+        echo "Build first as your normal user: cargo build --release --locked" >&2
+        echo "then run this script with sudo again." >&2
+        exit 1
+    fi
 else
     cargo build --release --locked
     SRC=target/release/headphones-control

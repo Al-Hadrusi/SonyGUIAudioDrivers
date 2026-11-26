@@ -45,6 +45,22 @@ jobs:
       - name: Release build
         run: cargo build --locked --release
 
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2
+        with:
+          tool: cargo-audit
+
+      # Fails on crates with known vulnerabilities (RustSec advisory database).
+      - name: cargo audit
+        run: cargo audit
+
   windows:
     name: Windows build and test
     runs-on: windows-latest

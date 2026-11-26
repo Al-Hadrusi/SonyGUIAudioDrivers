@@ -10,15 +10,33 @@ use std::path::{Path, PathBuf};
 
 pub const APP_ID: &str = "headphones-control";
 
+/// Freedesktop menus only exist on Linux/BSD desktops. Elsewhere (Windows)
+/// the app must not write these files or run the helper programs below:
+/// they don't exist there, so a same-named program planted in any `PATH`
+/// directory would be started instead.
+pub const SUPPORTED: bool = cfg!(all(unix, not(target_os = "macos")));
+
+fn unsupported() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "application-menu entries are only supported on Linux desktops",
+    )
+}
+
 const ICON_SVG: &[u8] = include_bytes!("../assets/headphones-control.svg");
 const ICON_PNG: &[u8] = include_bytes!("../assets/headphones-control-256.png");
 
 /// `$XDG_DATA_HOME`, or `~/.local/share`.
 pub fn data_home() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
-        .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        // The XDG spec says relative paths must be ignored (they would
+        // point into whatever directory the app was started from).
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            let home = PathBuf::from(std::env::var_os("HOME")?);
+            home.is_absolute().then(|| home.join(".local/share"))
+        })
 }
 
 fn entry_path(data: &Path) -> PathBuf {
@@ -99,6 +117,9 @@ pub fn check_in(data: &Path) -> EntryCheck {
 }
 
 pub fn check() -> EntryCheck {
+    if !SUPPORTED {
+        return EntryCheck::Ok; // nothing to install on this platform
+    }
     match data_home() {
         Some(d) => check_in(&d),
         None if is_installed() => EntryCheck::Ok,
@@ -189,6 +210,9 @@ pub fn uninstall_from(data: &Path) -> io::Result<()> {
 
 /// Install for the current user, launching the running executable.
 pub fn install() -> io::Result<()> {
+    if !SUPPORTED {
+        return Err(unsupported());
+    }
     let data =
         data_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
     let exe = std::env::current_exe()?;
@@ -198,6 +222,9 @@ pub fn install() -> io::Result<()> {
 }
 
 pub fn uninstall() -> io::Result<()> {
+    if !SUPPORTED {
+        return Err(unsupported());
+    }
     let data =
         data_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
     uninstall_from(&data)?;
@@ -208,6 +235,9 @@ pub fn uninstall() -> io::Result<()> {
 /// Ask desktops to notice the change (KDE's menu cache, icon caches).
 /// Missing tools are fine: most desktops watch these folders anyway.
 fn refresh_menus(data: &Path) {
+    if !SUPPORTED {
+        return;
+    }
     let apps = data.join("applications");
     let icons = data.join("icons/hicolor");
     let commands: [(&str, Vec<&std::ffi::OsStr>); 4] = [

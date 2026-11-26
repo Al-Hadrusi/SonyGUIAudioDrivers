@@ -72,7 +72,13 @@ Ready-to-run builds for Linux (x86_64) and Windows are attached to each
 * **Windows:** extract the `.zip` and run `headphones-control.exe`. Pair the headset in Windows'
   Bluetooth settings first.
 
-`SHA256SUMS` lists the checksums of the downloads.
+`SHA256SUMS` lists the checksums of the downloads. Since a checksum file hosted next to the
+downloads can be replaced together with them, releases after 0.1.1 also carry signed build provenance; check
+that a download was built by this repository's release workflow with the GitHub CLI:
+
+```bash
+gh attestation verify headphones-control-<version>-x86_64-linux.tar.gz --repo Al-Hadrusi/SonyGUIAudioDrivers
+```
 
 ## Building and running
 
@@ -109,7 +115,8 @@ Remove it again with:
 ./packaging/linux/install.sh uninstall
 ```
 
-Use `PREFIX=/usr/local` (with `sudo`) for a system-wide install.
+Use `PREFIX=/usr/local` (with `sudo`) for a system-wide install. From a source checkout, run
+`cargo build --release --locked` as your normal user first: the script refuses to build as root.
 
 If you just use `cargo run`, the app adds itself to your application menu on first start (a launcher
 for the program you are running, plus its icon). On Wayland (e.g. KDE Plasma) this entry is also the

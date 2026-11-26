@@ -39,9 +39,14 @@ impl Config {
     /// `~/.config/headphones-control/settings`.
     pub fn default_path() -> Option<PathBuf> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+            // The XDG spec says relative paths must be ignored (they would
+            // point into whatever directory the app was started from).
+            .filter(|p| p.is_absolute())
+            .or_else(|| {
+                let home = PathBuf::from(std::env::var_os("HOME")?);
+                home.is_absolute().then(|| home.join(".config"))
+            })?;
         Some(base.join("headphones-control").join("settings"))
     }
 
@@ -126,7 +131,12 @@ impl Config {
             }
         }
         if let Some(address) = address {
-            let name = name.unwrap_or_else(|| address.clone());
+            // The name came from Bluetooth; files written by older versions
+            // kept bidi/format characters, so clean it again on load.
+            let name = name
+                .map(|n| crate::text::sanitize(&n, 64))
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| address.clone());
             cfg.last_device = Some(DeviceInfo {
                 address,
                 name,
