@@ -1,6 +1,6 @@
 [package]
 name = "headphones-control"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 description = "Unofficial desktop control app for Sony Bluetooth headphones and earbuds (noise cancelling, ambient sound, EQ, ...), written in 100% safe Rust."

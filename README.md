@@ -175,7 +175,7 @@ Then pair the headset (for example with `bluetoothctl`: `scan on`, `pair <MAC>`,
 #### Installing with Portage
 
 `packaging/gentoo` is a small overlay for `media-sound/headphones-control`, with a release ebuild
-(`0.1.0`, keyword `~amd64`) and a live ebuild (`9999`, built from git). USE flags: `bluetooth`,
+(`0.1.1`, keyword `~amd64`) and a live ebuild (`9999`, built from git). USE flags: `bluetooth`,
 `notifications` and `tray`, all on by default. Register the overlay with Portage by running this from
 the root of your clone:
 
@@ -193,7 +193,7 @@ The overlay has no `Manifest` (it would list checksums for ~400 crate files), so
 This downloads the sources:
 
 ```bash
-sudo ebuild packaging/gentoo/media-sound/headphones-control/headphones-control-0.1.0.ebuild manifest
+sudo ebuild packaging/gentoo/media-sound/headphones-control/headphones-control-0.1.1.ebuild manifest
 ```
 
 Then install:
