@@ -13,6 +13,12 @@ DESKTOP="$PREFIX/share/applications/headphones-control.desktop"
 ICON_SVG="$PREFIX/share/icons/hicolor/scalable/apps/headphones-control.svg"
 ICON_PNG="$PREFIX/share/icons/hicolor/256x256/apps/headphones-control.png"
 
+case "$BIN" in
+    *[[:cntrl:]]*)
+        echo "Refusing to install: PREFIX contains control characters" >&2
+        exit 1 ;;
+esac
+
 if [ "${1:-}" = "uninstall" ]; then
     rm -f "$BIN" "$DESKTOP" "$ICON_SVG" "$ICON_PNG"
     echo "Removed Headphones Control from $PREFIX"
@@ -29,8 +35,16 @@ fi
 install -Dm755 "$SRC" "$BIN"
 # Point the launcher at the installed program, so it works even when
 # $PREFIX/bin is not on PATH.
+#
+# $BIN is not trusted to be "nice": a '|' or '&' in it used to be interpreted
+# by sed (GNU sed can even run commands via the 'e' flag), and a newline,
+# '%' or quote would corrupt or inject keys into the desktop entry. Refuse
+# control characters (checked above), quote it per the Desktop Entry spec and hand it to awk
+# through the environment, where it is never parsed as code.
+EXEC_VALUE=$(printf '%s' "$BIN" | sed -e 's/[\\"`$]/\\&/g' -e 's/%/%%/g' -e 's/\\/\\\\/g')
 mkdir -p "$(dirname "$DESKTOP")"
-sed "s|^Exec=.*|Exec=\"$BIN\"|" packaging/linux/headphones-control.desktop > "$DESKTOP"
+EXEC_VALUE="$EXEC_VALUE" awk '/^Exec=/ { print "Exec=\"" ENVIRON["EXEC_VALUE"] "\""; next } { print }' \
+    packaging/linux/headphones-control.desktop > "$DESKTOP"
 chmod 644 "$DESKTOP"
 install -Dm644 assets/headphones-control.svg "$ICON_SVG"
 install -Dm644 assets/headphones-control-256.png "$ICON_PNG"

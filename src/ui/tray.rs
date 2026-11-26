@@ -89,7 +89,9 @@ impl ksni::Tray for TrayModel {
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
             title: "Headphones Control".into(),
-            description: self.summary(),
+            // Tooltip descriptions may be rendered as markup; the device
+            // name comes from Bluetooth.
+            description: headphones_control::text::escape_markup(&self.summary()),
             icon_name: String::new(),
             icon_pixmap: Vec::new(),
         }

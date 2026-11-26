@@ -54,6 +54,8 @@ pub fn list_paired() -> io::Result<Vec<DeviceInfo>> {
                     false,
                 ),
             };
+            // Names come from the remote device: strip control/bidi characters.
+            let name = crate::text::sanitize(&name, 64);
             let name = if name.is_empty() {
                 "Sony headset".to_string()
             } else {

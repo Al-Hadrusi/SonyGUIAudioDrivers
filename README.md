@@ -189,14 +189,9 @@ Accept the testing keyword. Use `**` instead of `~amd64` for the live version:
 echo "media-sound/headphones-control ~amd64" | sudo tee /etc/portage/package.accept_keywords/headphones-control
 ```
 
-The overlay has no `Manifest` (it would list checksums for ~400 crate files), so create it once.
-This downloads the sources:
-
-```bash
-sudo ebuild packaging/gentoo/media-sound/headphones-control/headphones-control-0.1.1.ebuild manifest
-```
-
-Then install:
+The overlay ships a `Manifest` with the checksums of the release tarball and every crate, so
+Portage verifies what it downloads. Don't regenerate it with `ebuild ... manifest`: that would
+trust whatever the download servers return. Then install:
 
 ```bash
 sudo emerge --ask media-sound/headphones-control

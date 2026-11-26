@@ -70,7 +70,26 @@ impl Config {
             fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, self.serialize())?;
+        // Never follow a planted symlink (or reuse a file someone else
+        // created) at the temporary path: remove it and create it afresh.
+        match fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        {
+            use std::io::Write;
+            let mut file = options.open(&tmp)?;
+            file.write_all(self.serialize().as_bytes())?;
+            file.sync_all()?;
+        }
         fs::rename(&tmp, path)
     }
 
@@ -121,8 +140,13 @@ impl Config {
         let mut out = String::from("# Headphones Control settings\n");
         if let Some(d) = &self.last_device {
             // Names come from Bluetooth; keep them on one line.
-            let name: String = d.name.chars().filter(|c| !c.is_control()).collect();
-            out.push_str(&format!("last_address={}\nlast_name={}\n", d.address, name));
+            // (So can addresses on Windows, where they are device ids.)
+            let one_line = |s: &str| s.chars().filter(|c| !c.is_control()).collect::<String>();
+            out.push_str(&format!(
+                "last_address={}\nlast_name={}\n",
+                one_line(&d.address),
+                one_line(&d.name)
+            ));
         }
         out.push_str(&format!("auto_connect={}\n", self.auto_connect));
         out.push_str(&format!("menu_entry_removed={}\n", self.menu_entry_removed));
@@ -197,6 +221,16 @@ mod tests {
         };
         cfg.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path), cfg);
+        // A symlink planted at the temporary path is replaced, not followed.
+        #[cfg(unix)]
+        {
+            let victim = dir.join("victim");
+            fs::write(&victim, "keep").unwrap();
+            std::os::unix::fs::symlink(&victim, path.with_extension("tmp")).unwrap();
+            cfg.save_to(&path).unwrap();
+            assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
+            assert_eq!(Config::load_from(&path), cfg);
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

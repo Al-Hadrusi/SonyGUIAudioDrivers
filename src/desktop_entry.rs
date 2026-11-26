@@ -53,7 +53,17 @@ fn user_entry_exec(data: &Path) -> Option<PathBuf> {
     let mut out = String::new();
     let mut chars = level1.chars();
     while let Some(c) = chars.next() {
-        out.push(if c == '\\' { chars.next()? } else { c });
+        match c {
+            '\\' => out.push(chars.next()?),
+            // Field-code level: `%%` stands for one `%`.
+            '%' => {
+                if chars.next()? != '%' {
+                    return None;
+                }
+                out.push('%');
+            }
+            c => out.push(c),
+        }
     }
     Some(PathBuf::from(out))
 }
@@ -97,11 +107,18 @@ pub fn check() -> EntryCheck {
 }
 
 /// Quote a path for the `Exec=` key (Desktop Entry Specification).
+///
+/// `%` starts a field code (`%f`, `%u`, ...) even inside quotes, so it is
+/// written as `%%`. Paths with control characters (a newline would start a
+/// new key, e.g. a second `Exec=`) are refused by [`entry_text`].
 fn quote_exec(path: &str) -> String {
     let mut out = String::from("\"");
     for c in path.chars() {
         if matches!(c, '"' | '`' | '$' | '\\') {
             out.push('\\');
+        }
+        if c == '%' {
+            out.push('%');
         }
         out.push(c);
     }
@@ -110,8 +127,20 @@ fn quote_exec(path: &str) -> String {
     out.replace('\\', "\\\\")
 }
 
-pub fn entry_text(exe: &Path) -> String {
-    format!(
+pub fn entry_text(exe: &Path) -> io::Result<String> {
+    let exe = exe.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "program path is not valid UTF-8",
+        )
+    })?;
+    if exe.chars().any(char::is_control) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "program path contains control characters",
+        ));
+    }
+    Ok(format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=Headphones Control\n\
@@ -123,18 +152,19 @@ pub fn entry_text(exe: &Path) -> String {
          Categories=AudioVideo;Audio;Settings;HardwareSettings;\n\
          Keywords=sony;headphones;noise;cancelling;anc;ambient;equalizer;bluetooth;\n\
          StartupWMClass={APP_ID}\n",
-        quote_exec(&exe.to_string_lossy())
-    )
+        quote_exec(exe)
+    ))
 }
 
 /// Install the entry and icons under `data` (normally [`data_home`]),
 /// launching `exe`.
 pub fn install_into(data: &Path, exe: &Path) -> io::Result<()> {
+    let text = entry_text(exe)?;
     let entry = entry_path(data);
     if let Some(dir) = entry.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(&entry, entry_text(exe))?;
+    fs::write(&entry, text)?;
     let [svg, png] = icon_paths(data);
     for (path, bytes) in [(svg, ICON_SVG), (png, ICON_PNG)] {
         if let Some(dir) = path.parent() {
@@ -209,6 +239,13 @@ mod tests {
         assert_eq!(quote_exec("/home/my dir/app"), "\"/home/my dir/app\"");
         // $ and " are escaped with a backslash, which the file format doubles.
         assert_eq!(quote_exec("/a$b\"c"), "\"/a\\\\$b\\\\\"c\"");
+        // % would start a field code.
+        assert_eq!(quote_exec("/opt/100%f/app"), "\"/opt/100%%f/app\"");
+    }
+
+    #[test]
+    fn refuses_paths_with_newlines() {
+        assert!(entry_text(Path::new("/tmp/x\nExec=/bin/evil")).is_err());
     }
 
     #[test]
@@ -221,6 +258,7 @@ mod tests {
         for odd in [
             "/nonexistent/dir with space/app",
             "/nonexistent/a$b\"c\\d`e/app",
+            "/nonexistent/100%u/app",
         ] {
             install_into(&dir, Path::new(odd)).unwrap();
             assert_eq!(user_entry_exec(&dir).unwrap(), PathBuf::from(odd));

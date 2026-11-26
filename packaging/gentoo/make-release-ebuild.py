@@ -53,3 +53,8 @@ for needle in ("git-r3", "EGIT_", "cargo_live_src_unpack"):
 out = PKG / f"headphones-control-{version}.ebuild"
 out.write_text(text)
 print(f"wrote {out.relative_to(ROOT)} with {len(crates)} crates")
+print(
+    "Now update the Manifest (checksums Portage verifies downloads against) once the tag\n"
+    "is pushed, check the tarball matches `git archive` of the tag, and commit it:\n"
+    f"    ebuild {out.relative_to(ROOT)} manifest"
+)
