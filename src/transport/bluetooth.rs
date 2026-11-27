@@ -10,7 +10,7 @@ use std::io;
 use std::str::FromStr;
 use std::time::Duration;
 
-use bluer::rfcomm::{Profile, Role, SocketAddr, Stream};
+use bluer::rfcomm::{Profile, ReqError, Role, Security, SecurityLevel, Socket, SocketAddr, Stream};
 use bluer::{Address, Session, Uuid};
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -24,6 +24,8 @@ pub const SONY_UUID_V1: Uuid = Uuid::from_u128(0x96CC203E_5068_46AD_B32D_E316F5E
 pub const SONY_UUID_V2: Uuid = Uuid::from_u128(0x956C7B26_D49A_4BA8_B03F_B17D393CB6E2);
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Bluetooth names are at most 248 bytes; keep displayed names short.
+const MAX_NAME_CHARS: usize = 64;
 
 fn io_err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
@@ -47,7 +49,15 @@ pub fn list_paired() -> io::Result<Vec<DeviceInfo>> {
                 continue;
             }
             let uuids = dev.uuids().await.ok().flatten().unwrap_or_default();
-            let name = dev.alias().await.unwrap_or_else(|_| addr.to_string());
+            let name = crate::text::sanitize(
+                &dev.alias().await.unwrap_or_else(|_| addr.to_string()),
+                MAX_NAME_CHARS,
+            );
+            let name = if name.is_empty() {
+                addr.to_string()
+            } else {
+                name
+            };
             let sony = uuids.contains(&SONY_UUID_V1) || uuids.contains(&SONY_UUID_V2);
             let looks_sony = ["WH-", "WF-", "WI-", "LINKBUDS", "ULT", "INZONE"]
                 .iter()
@@ -93,7 +103,14 @@ async fn connect_stream(addr: Address) -> io::Result<Stream> {
         .ok()
         .and_then(|c| c.parse::<u8>().ok())
     {
-        return Stream::connect(SocketAddr::new(addr, channel)).await;
+        // Same requirement as the profile path below: an authenticated,
+        // encrypted link to the paired headset only.
+        let socket = Socket::new()?;
+        socket.set_security(Security {
+            level: SecurityLevel::Medium,
+            key_size: 0,
+        })?;
+        return socket.connect(SocketAddr::new(addr, channel)).await;
     }
 
     let session = Session::new().await.map_err(io_err)?;
@@ -117,7 +134,10 @@ async fn connect_stream(addr: Address) -> io::Result<Stream> {
         let profile = Profile {
             uuid,
             role: Some(Role::Client),
-            require_authentication: Some(false),
+            // The headset is paired, so insist on an authenticated
+            // (encrypted) link: an unauthenticated one could be a device
+            // spoofing the headset's address.
+            require_authentication: Some(true),
             require_authorization: Some(false),
             auto_connect: Some(false),
             ..Default::default()
@@ -131,7 +151,19 @@ async fn connect_stream(addr: Address) -> io::Result<Stream> {
         };
         let dev = device.clone();
         let connect = tokio::spawn(async move { dev.connect_profile(&uuid).await });
-        let request = tokio::time::timeout(Duration::from_secs(8), handle.next()).await;
+        // Only accept the connection from the headset we asked for: while the
+        // profile is registered, BlueZ could hand us a connection from any
+        // other device that offers the same service UUID.
+        let request = tokio::time::timeout(Duration::from_secs(8), async {
+            while let Some(req) = handle.next().await {
+                if req.device() == addr {
+                    return Some(req);
+                }
+                req.reject(ReqError::Rejected);
+            }
+            None
+        })
+        .await;
         match request {
             Ok(Some(req)) => {
                 let stream = req.accept().map_err(io_err)?;
@@ -148,6 +180,36 @@ async fn connect_stream(addr: Address) -> io::Result<Stream> {
         }
     }
     Err(last_error)
+}
+
+/// What the kernel reports about an open control connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkInfo {
+    /// Address of the device at the other end of the socket.
+    pub peer: String,
+    /// Security level the link actually runs at (not just what was asked).
+    pub security: SecurityLevel,
+}
+
+impl LinkInfo {
+    /// The link is authenticated and encrypted (BlueZ "medium" or better).
+    pub fn is_authenticated(&self) -> bool {
+        self.security >= SecurityLevel::Medium
+    }
+}
+
+impl BluetoothTransport {
+    /// Peer address and security level of the open connection, as reported
+    /// by the kernel. Used by `examples/bt_check.rs` to verify on real
+    /// hardware that only the chosen headset, over an authenticated link,
+    /// is accepted.
+    pub fn link_info(&self) -> io::Result<LinkInfo> {
+        let socket: &Socket = self.stream.as_ref();
+        Ok(LinkInfo {
+            peer: self.stream.peer_addr()?.addr.to_string(),
+            security: socket.security()?.level,
+        })
+    }
 }
 
 impl Transport for BluetoothTransport {
@@ -168,5 +230,22 @@ impl Transport for BluetoothTransport {
                 Ok(result) => result,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_medium_or_higher_counts_as_authenticated() {
+        let link = |security| LinkInfo {
+            peer: "AA:BB:CC:DD:EE:FF".into(),
+            security,
+        };
+        assert!(!link(SecurityLevel::Sdp).is_authenticated());
+        assert!(!link(SecurityLevel::Low).is_authenticated());
+        assert!(link(SecurityLevel::Medium).is_authenticated());
+        assert!(link(SecurityLevel::High).is_authenticated());
     }
 }

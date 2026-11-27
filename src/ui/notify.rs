@@ -14,6 +14,9 @@ pub fn battery(device: &str, alert: Alert) {
         let level = match alert {
             Alert::Low(l) | Alert::Critical(l) => l,
         };
+        // The device name comes from Bluetooth and notification servers
+        // interpret markup in the body (links, images): escape it.
+        let device = headphones_control::text::escape_markup(device);
         let body = format!("{device}: {level}% left. Charge your headphones soon.");
         std::thread::spawn(move || {
             let result = notify_rust::Notification::new()

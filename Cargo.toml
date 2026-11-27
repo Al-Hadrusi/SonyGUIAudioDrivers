@@ -18,6 +18,11 @@ tray = ["dep:ksni"]
 # Desktop notifications (low battery), Linux.
 notifications = ["dep:notify-rust"]
 
+[[example]]
+# Hardware check for the Bluetooth hardening; see the file header.
+name = "bt_check"
+required-features = ["bluetooth"]
+
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
 

@@ -1020,10 +1020,10 @@ fn parse_gs_info(p: &[u8]) -> Result<Notification, ParseError> {
         let (&len, tail) = rest.split_first().ok_or(invalid("missing text length"))?;
         let len = usize::from(len);
         let bytes = tail.get(..len).ok_or(invalid("text longer than message"))?;
-        let text: String = String::from_utf8_lossy(&bytes[..len.min(GS_TEXT_MAX)])
-            .chars()
-            .filter(|c| !c.is_control())
-            .collect();
+        let text = crate::text::sanitize(
+            &String::from_utf8_lossy(&bytes[..len.min(GS_TEXT_MAX)]),
+            GS_TEXT_MAX,
+        );
         texts.push(text);
         rest = &tail[len..];
     }
@@ -1736,7 +1736,8 @@ impl Notification {
                 need(p, 3)?;
                 let len = usize::from(p[2]);
                 need(p, 3 + len)?;
-                let text = String::from_utf8_lossy(&p[3..3 + len]).trim().to_string();
+                // Device-supplied text: no control or bidi characters.
+                let text = crate::text::sanitize(&String::from_utf8_lossy(&p[3..3 + len]), 64);
                 Ok(Notification::FirmwareVersion(text))
             }
             op::V1_BATTERY_RET | op::V1_BATTERY_NOTIFY if !v2 => parse_battery(p, d),
@@ -2090,6 +2091,19 @@ mod tests {
         ambient: AmbientType::NoiseAdaptive,
     };
     const ALL_DIALECTS: [Dialect; 4] = [Dialect::V1, XM5, WF_XM5, XM6_D];
+
+    #[test]
+    fn device_text_is_sanitized() {
+        // Firmware version with a newline and a right-to-left override.
+        let mut p = vec![op::FW_VERSION_RET, 0x02, 0];
+        let text = "1.0\n\u{202E}evil".as_bytes();
+        p[2] = u8::try_from(text.len()).unwrap();
+        p.extend_from_slice(text);
+        assert_eq!(
+            Notification::parse(&p, Dialect::V1).unwrap(),
+            Notification::FirmwareVersion("1.0evil".into())
+        );
+    }
 
     #[test]
     fn v1_ambient_bytes() {

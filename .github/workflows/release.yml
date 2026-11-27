@@ -11,24 +11,51 @@ on:
         description: "Version to release, without the v (e.g. 0.1.0)"
         required: true
 
+# Least privilege: jobs only get a read-only token unless they ask for more.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   # "0.1.0" from either the manual input or the pushed tag "v0.1.0".
   VERSION: ${{ inputs.version || github.ref_name }}
 
 jobs:
+  # Release gate (packaging/release/check-release.sh): the version must be a
+  # plain semantic version matching Cargo.toml, the commit must already be on
+  # main, and an existing tag for that version must point at this commit, so
+  # a published release can't be overwritten from other code.
+  validate:
+    name: Release checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          # Full history and tags: needed to check the commit is on main.
+          fetch-depth: 0
+
+      - name: Check version, branch and tag
+        run: sh packaging/release/check-release.sh "$VERSION" "$GITHUB_SHA" origin/main
+
   linux:
     name: Linux build
+    needs: validate
     # An older Ubuntu keeps the glibc requirement low, so the binary runs on
     # more distributions.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          # Pinned by commit, so the toolchain is no longer taken from the ref.
+          toolchain: stable
 
       - name: Build
         run: cargo build --release --locked
@@ -44,18 +71,24 @@ jobs:
           cp LICENSE README.md "$DIR/"
           tar czf "$DIR.tar.gz" "$DIR"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux
           path: headphones-control-*-x86_64-linux.tar.gz
 
   windows:
     name: Windows build
+    needs: validate
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          # Pinned by commit, so the toolchain is no longer taken from the ref.
+          toolchain: stable
 
       - name: Build
         run: cargo build --release --locked
@@ -69,29 +102,53 @@ jobs:
           Copy-Item target/release/headphones-control.exe, LICENSE, README.md $dir
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows
           path: headphones-control-*-x86_64-windows.zip
 
   release:
     name: Publish release
-    needs: [linux, windows]
+    needs: [validate, linux, windows]
     runs-on: ubuntu-latest
+    # Protection rules (required reviewers, allowed branches/tags) for this
+    # environment are configured in the repository settings; see README.
+    environment: release
     permissions:
       contents: write
+      # Signed build provenance: verify a download with
+      #   gh attestation verify <file> --repo Al-Hadrusi/SonyGUIAudioDrivers
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           merge-multiple: true
 
       - name: Checksums
         run: sha256sum headphones-control-* > SHA256SUMS
 
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            headphones-control-*
+            SHA256SUMS
+
       - name: Tag name
         run: echo "TAG=v${VERSION#v}" >> "$GITHUB_ENV"
 
-      - uses: softprops/action-gh-release@v2
+      # Never replace the assets of a published release (fails closed).
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          path: src
+
+      - name: Refuse to overwrite a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh src/packaging/release/check-not-published.sh "$TAG"
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           # Creates the tag on this commit when it doesn't exist yet.
           tag_name: ${{ env.TAG }}

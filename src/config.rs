@@ -39,9 +39,14 @@ impl Config {
     /// `~/.config/headphones-control/settings`.
     pub fn default_path() -> Option<PathBuf> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+            // The XDG spec says relative paths must be ignored (they would
+            // point into whatever directory the app was started from).
+            .filter(|p| p.is_absolute())
+            .or_else(|| {
+                let home = PathBuf::from(std::env::var_os("HOME")?);
+                home.is_absolute().then(|| home.join(".config"))
+            })?;
         Some(base.join("headphones-control").join("settings"))
     }
 
@@ -70,7 +75,26 @@ impl Config {
             fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, self.serialize())?;
+        // Never follow a planted symlink (or reuse a file someone else
+        // created) at the temporary path: remove it and create it afresh.
+        match fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        {
+            use std::io::Write;
+            let mut file = options.open(&tmp)?;
+            file.write_all(self.serialize().as_bytes())?;
+            file.sync_all()?;
+        }
         fs::rename(&tmp, path)
     }
 
@@ -107,7 +131,12 @@ impl Config {
             }
         }
         if let Some(address) = address {
-            let name = name.unwrap_or_else(|| address.clone());
+            // The name came from Bluetooth; files written by older versions
+            // kept bidi/format characters, so clean it again on load.
+            let name = name
+                .map(|n| crate::text::sanitize(&n, 64))
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| address.clone());
             cfg.last_device = Some(DeviceInfo {
                 address,
                 name,
@@ -121,8 +150,13 @@ impl Config {
         let mut out = String::from("# Headphones Control settings\n");
         if let Some(d) = &self.last_device {
             // Names come from Bluetooth; keep them on one line.
-            let name: String = d.name.chars().filter(|c| !c.is_control()).collect();
-            out.push_str(&format!("last_address={}\nlast_name={}\n", d.address, name));
+            // (So can addresses on Windows, where they are device ids.)
+            let one_line = |s: &str| s.chars().filter(|c| !c.is_control()).collect::<String>();
+            out.push_str(&format!(
+                "last_address={}\nlast_name={}\n",
+                one_line(&d.address),
+                one_line(&d.name)
+            ));
         }
         out.push_str(&format!("auto_connect={}\n", self.auto_connect));
         out.push_str(&format!("menu_entry_removed={}\n", self.menu_entry_removed));
@@ -184,6 +218,33 @@ mod tests {
         assert!(parsed.auto_connect);
     }
 
+    /// The settings file holds the headset's Bluetooth address (a stable
+    /// identifier): it must not be readable by other users, including when
+    /// an older version left a world-readable file behind.
+    #[cfg(unix)]
+    #[test]
+    fn settings_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("hpc-perm-test-{}", std::process::id()));
+        let path = dir.join("settings");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "last_address=AA:BB:CC:DD:EE:FF\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let cfg = Config {
+            last_device: Some(DeviceInfo {
+                address: "11:22:33:44:55:66".into(),
+                name: "Test headset".into(),
+                connected: false,
+            }),
+            ..Config::default()
+        };
+        cfg.save_to(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "settings file mode {mode:o}");
+        assert_eq!(Config::load_from(&path), cfg);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn save_and_load_file() {
         let dir = std::env::temp_dir().join(format!("hpc-test-{}", std::process::id()));
@@ -197,6 +258,16 @@ mod tests {
         };
         cfg.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path), cfg);
+        // A symlink planted at the temporary path is replaced, not followed.
+        #[cfg(unix)]
+        {
+            let victim = dir.join("victim");
+            fs::write(&victim, "keep").unwrap();
+            std::os::unix::fs::symlink(&victim, path.with_extension("tmp")).unwrap();
+            cfg.save_to(&path).unwrap();
+            assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
+            assert_eq!(Config::load_from(&path), cfg);
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

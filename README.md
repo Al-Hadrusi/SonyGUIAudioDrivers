@@ -72,7 +72,18 @@ Ready-to-run builds for Linux (x86_64) and Windows are attached to each
 * **Windows:** extract the `.zip` and run `headphones-control.exe`. Pair the headset in Windows'
   Bluetooth settings first.
 
-`SHA256SUMS` lists the checksums of the downloads.
+`SHA256SUMS` lists the checksums of the downloads. Since a checksum file hosted next to the
+downloads can be replaced together with them, releases after 0.1.1 also carry signed build provenance; check
+that a download was built by this repository's release workflow with the GitHub CLI:
+
+```bash
+gh attestation verify headphones-control-<version>-x86_64-linux.tar.gz --repo Al-Hadrusi/SonyGUIAudioDrivers
+```
+
+## Security
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability, and for the threat model, the controls
+in this repository, and the GitHub settings maintainers must apply.
 
 ## Building and running
 
@@ -109,7 +120,8 @@ Remove it again with:
 ./packaging/linux/install.sh uninstall
 ```
 
-Use `PREFIX=/usr/local` (with `sudo`) for a system-wide install.
+Use `PREFIX=/usr/local` (with `sudo`) for a system-wide install. From a source checkout, run
+`cargo build --release --locked` as your normal user first: the script refuses to build as root.
 
 If you just use `cargo run`, the app adds itself to your application menu on first start (a launcher
 for the program you are running, plus its icon). On Wayland (e.g. KDE Plasma) this entry is also the
@@ -189,14 +201,9 @@ Accept the testing keyword. Use `**` instead of `~amd64` for the live version:
 echo "media-sound/headphones-control ~amd64" | sudo tee /etc/portage/package.accept_keywords/headphones-control
 ```
 
-The overlay has no `Manifest` (it would list checksums for ~400 crate files), so create it once.
-This downloads the sources:
-
-```bash
-sudo ebuild packaging/gentoo/media-sound/headphones-control/headphones-control-0.1.1.ebuild manifest
-```
-
-Then install:
+The overlay ships a `Manifest` with the checksums of the release tarball and every crate, so
+Portage verifies what it downloads. Don't regenerate it with `ebuild ... manifest`: that would
+trust whatever the download servers return. Then install:
 
 ```bash
 sudo emerge --ask media-sound/headphones-control

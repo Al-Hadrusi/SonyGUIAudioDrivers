@@ -10,15 +10,33 @@ use std::path::{Path, PathBuf};
 
 pub const APP_ID: &str = "headphones-control";
 
+/// Freedesktop menus only exist on Linux/BSD desktops. Elsewhere (Windows)
+/// the app must not write these files or run the helper programs below:
+/// they don't exist there, so a same-named program planted in any `PATH`
+/// directory would be started instead.
+pub const SUPPORTED: bool = cfg!(all(unix, not(target_os = "macos")));
+
+fn unsupported() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "application-menu entries are only supported on Linux desktops",
+    )
+}
+
 const ICON_SVG: &[u8] = include_bytes!("../assets/headphones-control.svg");
 const ICON_PNG: &[u8] = include_bytes!("../assets/headphones-control-256.png");
 
 /// `$XDG_DATA_HOME`, or `~/.local/share`.
 pub fn data_home() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
-        .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        // The XDG spec says relative paths must be ignored (they would
+        // point into whatever directory the app was started from).
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            let home = PathBuf::from(std::env::var_os("HOME")?);
+            home.is_absolute().then(|| home.join(".local/share"))
+        })
 }
 
 fn entry_path(data: &Path) -> PathBuf {
@@ -53,7 +71,17 @@ fn user_entry_exec(data: &Path) -> Option<PathBuf> {
     let mut out = String::new();
     let mut chars = level1.chars();
     while let Some(c) = chars.next() {
-        out.push(if c == '\\' { chars.next()? } else { c });
+        match c {
+            '\\' => out.push(chars.next()?),
+            // Field-code level: `%%` stands for one `%`.
+            '%' => {
+                if chars.next()? != '%' {
+                    return None;
+                }
+                out.push('%');
+            }
+            c => out.push(c),
+        }
     }
     Some(PathBuf::from(out))
 }
@@ -89,6 +117,9 @@ pub fn check_in(data: &Path) -> EntryCheck {
 }
 
 pub fn check() -> EntryCheck {
+    if !SUPPORTED {
+        return EntryCheck::Ok; // nothing to install on this platform
+    }
     match data_home() {
         Some(d) => check_in(&d),
         None if is_installed() => EntryCheck::Ok,
@@ -97,11 +128,18 @@ pub fn check() -> EntryCheck {
 }
 
 /// Quote a path for the `Exec=` key (Desktop Entry Specification).
+///
+/// `%` starts a field code (`%f`, `%u`, ...) even inside quotes, so it is
+/// written as `%%`. Paths with control characters (a newline would start a
+/// new key, e.g. a second `Exec=`) are refused by [`entry_text`].
 fn quote_exec(path: &str) -> String {
     let mut out = String::from("\"");
     for c in path.chars() {
         if matches!(c, '"' | '`' | '$' | '\\') {
             out.push('\\');
+        }
+        if c == '%' {
+            out.push('%');
         }
         out.push(c);
     }
@@ -110,8 +148,20 @@ fn quote_exec(path: &str) -> String {
     out.replace('\\', "\\\\")
 }
 
-pub fn entry_text(exe: &Path) -> String {
-    format!(
+pub fn entry_text(exe: &Path) -> io::Result<String> {
+    let exe = exe.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "program path is not valid UTF-8",
+        )
+    })?;
+    if exe.chars().any(char::is_control) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "program path contains control characters",
+        ));
+    }
+    Ok(format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=Headphones Control\n\
@@ -123,18 +173,19 @@ pub fn entry_text(exe: &Path) -> String {
          Categories=AudioVideo;Audio;Settings;HardwareSettings;\n\
          Keywords=sony;headphones;noise;cancelling;anc;ambient;equalizer;bluetooth;\n\
          StartupWMClass={APP_ID}\n",
-        quote_exec(&exe.to_string_lossy())
-    )
+        quote_exec(exe)
+    ))
 }
 
 /// Install the entry and icons under `data` (normally [`data_home`]),
 /// launching `exe`.
 pub fn install_into(data: &Path, exe: &Path) -> io::Result<()> {
+    let text = entry_text(exe)?;
     let entry = entry_path(data);
     if let Some(dir) = entry.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(&entry, entry_text(exe))?;
+    fs::write(&entry, text)?;
     let [svg, png] = icon_paths(data);
     for (path, bytes) in [(svg, ICON_SVG), (png, ICON_PNG)] {
         if let Some(dir) = path.parent() {
@@ -159,6 +210,9 @@ pub fn uninstall_from(data: &Path) -> io::Result<()> {
 
 /// Install for the current user, launching the running executable.
 pub fn install() -> io::Result<()> {
+    if !SUPPORTED {
+        return Err(unsupported());
+    }
     let data =
         data_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
     let exe = std::env::current_exe()?;
@@ -168,6 +222,9 @@ pub fn install() -> io::Result<()> {
 }
 
 pub fn uninstall() -> io::Result<()> {
+    if !SUPPORTED {
+        return Err(unsupported());
+    }
     let data =
         data_home().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
     uninstall_from(&data)?;
@@ -178,6 +235,9 @@ pub fn uninstall() -> io::Result<()> {
 /// Ask desktops to notice the change (KDE's menu cache, icon caches).
 /// Missing tools are fine: most desktops watch these folders anyway.
 fn refresh_menus(data: &Path) {
+    if !SUPPORTED {
+        return;
+    }
     let apps = data.join("applications");
     let icons = data.join("icons/hicolor");
     let commands: [(&str, Vec<&std::ffi::OsStr>); 4] = [
@@ -209,6 +269,13 @@ mod tests {
         assert_eq!(quote_exec("/home/my dir/app"), "\"/home/my dir/app\"");
         // $ and " are escaped with a backslash, which the file format doubles.
         assert_eq!(quote_exec("/a$b\"c"), "\"/a\\\\$b\\\\\"c\"");
+        // % would start a field code.
+        assert_eq!(quote_exec("/opt/100%f/app"), "\"/opt/100%%f/app\"");
+    }
+
+    #[test]
+    fn refuses_paths_with_newlines() {
+        assert!(entry_text(Path::new("/tmp/x\nExec=/bin/evil")).is_err());
     }
 
     #[test]
@@ -221,6 +288,7 @@ mod tests {
         for odd in [
             "/nonexistent/dir with space/app",
             "/nonexistent/a$b\"c\\d`e/app",
+            "/nonexistent/100%u/app",
         ] {
             install_into(&dir, Path::new(odd)).unwrap();
             assert_eq!(user_entry_exec(&dir).unwrap(), PathBuf::from(odd));

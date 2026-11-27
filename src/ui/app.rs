@@ -203,8 +203,8 @@ impl App {
     /// entry, so create it on first start (unless the user removed it) and
     /// re-point it when the program it launches has moved.
     fn ensure_menu_entry(&mut self) {
-        if self.show_demo {
-            return; // development runs don't touch the user's menu
+        if self.show_demo || !desktop_entry::SUPPORTED {
+            return; // development runs (and non-Linux) don't touch the user's menu
         }
         let check = desktop_entry::check();
         let needed = match check {
@@ -637,33 +637,40 @@ fn devices_screen(
                 }
             });
         }
-        ui.add_space(8.0);
-        section_label(ui, "App");
-        card(ui, None, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width() - 90.0);
-                    ui.label(RichText::new("Application menu").size(15.5).color(TEXT));
-                    let sub = if menu_installed {
-                        "Headphones Control is in your application menu."
-                    } else {
-                        "Add a launcher and icon to your application menu (also shows the app icon in the taskbar on Wayland)."
-                    };
-                    ui.label(RichText::new(sub).size(12.5).color(SUBTEXT));
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let (label, add) = if menu_installed { ("Remove", false) } else { ("Add", true) };
-                    if ui.add(egui::Button::new(RichText::new(label).color(ACCENT)).frame(false)).clicked() {
-                        action = Action::AddToMenu(add);
+        if desktop_entry::SUPPORTED || tray_note.is_some() {
+            ui.add_space(8.0);
+            section_label(ui, "App");
+            card(ui, None, |ui| {
+                // Freedesktop menus only; see `desktop_entry::SUPPORTED`.
+                if desktop_entry::SUPPORTED {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(ui.available_width() - 90.0);
+                            ui.label(RichText::new("Application menu").size(15.5).color(TEXT));
+                            let sub = if menu_installed {
+                                "Headphones Control is in your application menu."
+                            } else {
+                                "Add a launcher and icon to your application menu (also shows the app icon in the taskbar on Wayland)."
+                            };
+                            ui.label(RichText::new(sub).size(12.5).color(SUBTEXT));
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let (label, add) = if menu_installed { ("Remove", false) } else { ("Add", true) };
+                            if ui.add(egui::Button::new(RichText::new(label).color(ACCENT)).frame(false)).clicked() {
+                                action = Action::AddToMenu(add);
+                            }
+                        });
+                    });
+                }
+                if let Some(note) = tray_note {
+                    if desktop_entry::SUPPORTED {
+                        divider(ui);
                     }
-                });
+                    ui.label(RichText::new("Tray icon not available").size(15.5).color(TEXT));
+                    ui.label(RichText::new(note).size(12.0).color(MUTED));
+                }
             });
-            if let Some(note) = tray_note {
-                divider(ui);
-                ui.label(RichText::new("Tray icon not available").size(15.5).color(TEXT));
-                ui.label(RichText::new(note).size(12.0).color(MUTED));
-            }
-        });
+        }
         if !demo.is_empty() {
             ui.add_space(8.0);
             section_label(ui, "Demo (simulated)");

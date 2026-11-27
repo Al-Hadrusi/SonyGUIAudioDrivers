@@ -14,5 +14,6 @@ pub mod battery_alert;
 pub mod config;
 pub mod desktop_entry;
 pub mod protocol;
+pub mod text;
 pub mod transport;
 pub mod worker;

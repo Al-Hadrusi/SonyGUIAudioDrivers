@@ -14,6 +14,9 @@ use crate::transport::Transport;
 const ACK_TIMEOUT: Duration = Duration::from_millis(1000);
 const RETRIES: usize = 1;
 const READ_SLICE: Duration = Duration::from_millis(50);
+/// Most notifications kept between two polls. A misbehaving headset that
+/// floods us while we wait for an ACK cannot grow memory without bound.
+const MAX_PENDING: usize = 512;
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -157,6 +160,9 @@ impl Session {
                 match parsed {
                     Ok(n) => {
                         self.learn(&n, &frame.payload);
+                        if self.pending.len() >= MAX_PENDING {
+                            self.pending.pop_front();
+                        }
                         self.pending.push_back(n);
                     }
                     Err(e) => self.warn(format!("unparsable message: {e}")),
