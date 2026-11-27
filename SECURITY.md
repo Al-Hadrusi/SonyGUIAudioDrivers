@@ -24,6 +24,11 @@ RFCOMM and stores one small settings file. So the controls that matter are:
   It refuses unless the version is a plain semver matching `Cargo.toml`, the commit is already on
   `main`, and an existing `v<version>` tag points at that same commit (so a published release
   can't be overwritten from other code). Tests: `tests/release_gate.rs`.
+- **No overwriting a published release:** `packaging/release/check-not-published.sh` runs in the
+  publish job right before uploading. It continues only on a definite "404 Not Found" for the tag
+  from the GitHub API. An existing release, an API error or no answer stops the publish. The token
+  goes to curl on stdin and is never printed. Tests: `tests/release_publish_guard.rs` (against a
+  local fake API with a synthetic token).
 - Release jobs get a read-only token by default. Only the publish job gets `contents: write`, and
   it runs in the `release` environment. Actions are pinned to commit SHAs and kept updated by
   Dependabot. Releases carry signed build provenance (`gh attestation verify`).
@@ -68,15 +73,31 @@ run the checks. Commands use the GitHub CLI as a repository admin.
    Verify: `gh api repos/Al-Hadrusi/SonyGUIAudioDrivers/actions/permissions/workflow` shows
    `"default_workflow_permissions":"read"` and `"can_approve_pull_request_reviews":false`.
 6. **Releases and reporting** (Settings → General): turn on release immutability if your plan
-   offers it, so published assets can't be replaced. Turn on private vulnerability reporting
+   offers it, so published assets can't be replaced. The publish guard above only covers the
+   release workflow; immutability also blocks replacing assets by hand in the web page or the API,
+   for example from a stolen session. Turn on private vulnerability reporting
    (Settings → Code security).
    Verify: `gh api repos/Al-Hadrusi/SonyGUIAudioDrivers/private-vulnerability-reporting` shows
    `"enabled":true`.
 
 ## Pending: needs real hardware
 
-The Bluetooth controls (accept only the selected headset, require an authenticated link) are
-compiled and type-checked but haven't been exercised against a real headset. Verify with a
-paired headset: it connects. Then unpair it in `bluetoothctl` (`remove <MAC>`) without deleting
-the app's settings: the app must not get a control connection without a new pairing (expect a
-connection error or a pairing prompt, never a silent connect).
+The Bluetooth controls (accept only the selected headset, require an authenticated link) need a
+real headset to verify. On Linux, with the headset paired, on and nearby:
+
+```bash
+cargo run --release --example bt_check
+```
+
+It must end with `PASS`. Before that, it prints the peer address and the link's security level
+as the kernel reports them: the peer must be your headset and the level `Medium` or `High`. The
+tool only sends read-only requests. Then remove the pairing (`bluetoothctl`, `remove <MAC>`) and
+run the tool again with that address:
+
+```bash
+cargo run --release --example bt_check -- <MAC>
+```
+
+Now it must fail: either "not a paired Sony headset", a connection error, or a pairing prompt
+from your desktop, never `PASS`. Pair the headset again afterwards. On Windows the tool checks
+only that the headset answers, because Windows doesn't report the link's security level.

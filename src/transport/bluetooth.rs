@@ -182,6 +182,36 @@ async fn connect_stream(addr: Address) -> io::Result<Stream> {
     Err(last_error)
 }
 
+/// What the kernel reports about an open control connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkInfo {
+    /// Address of the device at the other end of the socket.
+    pub peer: String,
+    /// Security level the link actually runs at (not just what was asked).
+    pub security: SecurityLevel,
+}
+
+impl LinkInfo {
+    /// The link is authenticated and encrypted (BlueZ "medium" or better).
+    pub fn is_authenticated(&self) -> bool {
+        self.security >= SecurityLevel::Medium
+    }
+}
+
+impl BluetoothTransport {
+    /// Peer address and security level of the open connection, as reported
+    /// by the kernel. Used by `examples/bt_check.rs` to verify on real
+    /// hardware that only the chosen headset, over an authenticated link,
+    /// is accepted.
+    pub fn link_info(&self) -> io::Result<LinkInfo> {
+        let socket: &Socket = self.stream.as_ref();
+        Ok(LinkInfo {
+            peer: self.stream.peer_addr()?.addr.to_string(),
+            security: socket.security()?.level,
+        })
+    }
+}
+
 impl Transport for BluetoothTransport {
     fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
         let stream = &mut self.stream;
@@ -200,5 +230,22 @@ impl Transport for BluetoothTransport {
                 Ok(result) => result,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_medium_or_higher_counts_as_authenticated() {
+        let link = |security| LinkInfo {
+            peer: "AA:BB:CC:DD:EE:FF".into(),
+            security,
+        };
+        assert!(!link(SecurityLevel::Sdp).is_authenticated());
+        assert!(!link(SecurityLevel::Low).is_authenticated());
+        assert!(link(SecurityLevel::Medium).is_authenticated());
+        assert!(link(SecurityLevel::High).is_authenticated());
     }
 }
