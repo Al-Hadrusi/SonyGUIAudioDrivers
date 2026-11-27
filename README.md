@@ -80,6 +80,11 @@ that a download was built by this repository's release workflow with the GitHub 
 gh attestation verify headphones-control-<version>-x86_64-linux.tar.gz --repo Al-Hadrusi/SonyGUIAudioDrivers
 ```
 
+## Security
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability, and for the threat model, the controls
+in this repository, and the GitHub settings maintainers must apply.
+
 ## Building and running
 
 Install Rust from <https://rustup.rs>, then:

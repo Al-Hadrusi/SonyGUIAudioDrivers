@@ -218,6 +218,33 @@ mod tests {
         assert!(parsed.auto_connect);
     }
 
+    /// The settings file holds the headset's Bluetooth address (a stable
+    /// identifier): it must not be readable by other users, including when
+    /// an older version left a world-readable file behind.
+    #[cfg(unix)]
+    #[test]
+    fn settings_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("hpc-perm-test-{}", std::process::id()));
+        let path = dir.join("settings");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "last_address=AA:BB:CC:DD:EE:FF\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let cfg = Config {
+            last_device: Some(DeviceInfo {
+                address: "11:22:33:44:55:66".into(),
+                name: "Test headset".into(),
+                connected: false,
+            }),
+            ..Config::default()
+        };
+        cfg.save_to(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "settings file mode {mode:o}");
+        assert_eq!(Config::load_from(&path), cfg);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn save_and_load_file() {
         let dir = std::env::temp_dir().join(format!("hpc-test-{}", std::process::id()));

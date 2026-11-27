@@ -21,22 +21,22 @@ env:
   VERSION: ${{ inputs.version || github.ref_name }}
 
 jobs:
-  # The version ends up in file names, the tag and the release title: only
-  # accept a plain semantic version (no slashes, spaces or shell syntax).
+  # Release gate (packaging/release/check-release.sh): the version must be a
+  # plain semantic version matching Cargo.toml, the commit must already be on
+  # main, and an existing tag for that version must point at this commit, so
+  # a published release can't be overwritten from other code.
   validate:
-    name: Validate version
+    name: Release checks
     runs-on: ubuntu-latest
     steps:
-      - name: Check version format
-        shell: bash
-        run: |
-          V="${VERSION#v}"
-          # Whole-string match (a grep would accept a multi-line value whose
-          # first line looks fine, letting it inject lines into $GITHUB_ENV).
-          if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-            echo "::error::invalid version: must look like 1.2.3 or 1.2.3-rc.1"
-            exit 1
-          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          # Full history and tags: needed to check the commit is on main.
+          fetch-depth: 0
+
+      - name: Check version, branch and tag
+        run: sh packaging/release/check-release.sh "$VERSION" "$GITHUB_SHA" origin/main
 
   linux:
     name: Linux build
@@ -111,6 +111,9 @@ jobs:
     name: Publish release
     needs: [validate, linux, windows]
     runs-on: ubuntu-latest
+    # Protection rules (required reviewers, allowed branches/tags) for this
+    # environment are configured in the repository settings; see README.
+    environment: release
     permissions:
       contents: write
       # Signed build provenance: verify a download with
